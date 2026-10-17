@@ -1,6 +1,6 @@
 {
   "name": "copycopy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "漫画下载与管理桌面工具",
   "main": "./out/main/index.js",
   "author": "CopyCopy",
