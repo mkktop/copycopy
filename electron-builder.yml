@@ -7,7 +7,12 @@ directories:
   buildResources: build
 
 files:
-  - out/**/*
+  # out/ 是双关目录：electron-vite 构建输出 + （运行期）漫画下载目录。
+  # 便携版语义下下载的图片就落在 exe 旁的 out/ 里，重新打包时会把
+  # 整个本地漫画库塞进安装包（实测 85M -> 806M）。只收三个构建子目录。
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
   - package.json
 
 # 便携版把 config/out/logs 放在 exe 同级
