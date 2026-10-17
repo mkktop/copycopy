@@ -1,0 +1,43 @@
+appId: com.copycopy.app
+productName: CopyCopy
+copyright: Copyright © 2026 CopyCopy
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+
+# 便携版把 config/out/logs 放在 exe 同级
+portable:
+  artifactName: ${productName}-${version}-便携版.${ext}
+
+nsis:
+  artifactName: ${productName}-${version}-安装包.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CopyCopy
+  deleteAppDataOnUninstall: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# resources/ 需要在运行时被主进程读取，放在 asar 外。
+# 文件名要和 src/main/proxy.ts 的 EXTRA_CA_FILES 对得上，改名要同步改两处。
+# 窗口图标同理：打包后落在 exe 旁边的 resources/icon.png。
+extraResources:
+  - from: resources/isrg-roots.pem
+    to: isrg-roots.pem
+  - from: build/icon.png
+    to: icon.png

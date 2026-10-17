@@ -1,0 +1,165 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/*
+ * 主题令牌。
+ *
+ * 之前配色是硬编码在各视图里的深色值，加"跟随系统"之后
+ * naive-ui 组件变浅色、自定义 CSS 仍是深色，就成了花屏。
+ * 统一收成语义化变量，深浅两套只在这里切换。
+ *
+ * 变量名用语义（surface / text-2）而不是字面值（#18181e），
+ * 这样调色板变了不用挨个视图去改。
+ */
+
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --c-app: #101014;
+  --c-surface: #15151c;
+  --c-elevated: #18181e;
+  --c-elevated-hover: #1e1e26;
+  --c-placeholder: #1c1c22;
+  --c-sunken: #0b0b0f;
+  --c-reader-bar: rgba(16, 16, 20, 0.92);
+
+  --c-border: #26262e;
+  --c-border-strong: #2e2e38;
+
+  --c-text-1: #e8e8ef;
+  --c-text-2: #a5a5b2;
+  --c-text-3: #7a7a88;
+  --c-text-4: #5f5f6c;
+
+  --c-accent: #63e2b7;
+  --c-accent-2: #4f9dfd;
+  --c-accent-fg: #0d1a15;
+  --c-accent-soft: #1c2622;
+  --c-accent-border: #3f6f60;
+  --c-accent-2-soft: #1a2029;
+  --c-accent-2-border: #3a5478;
+  --c-accent-on: #ffffff;
+
+  --c-pill: #12a37a;
+  --c-selected: #16241f;
+  --c-picked: #1c2a25;
+  --c-active-border: #2f5f52;
+  --c-danger: #e88080;
+  --c-error-text: #d98a8a;
+  --c-warn-bg: #e8b64c;
+  --c-warn-fg: #2a1f00;
+  --c-title-fg: #10141a;
+
+  --c-hero-a: rgba(99, 226, 183, 0.14);
+  --c-hero-b: rgba(80, 160, 255, 0.12);
+  --c-mask: rgba(0, 0, 0, 0.85);
+  --c-scroll: #3a3a45;
+  --c-scroll-hover: #4d4d5a;
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  --c-app: #f4f5f7;
+  --c-surface: #ffffff;
+  --c-elevated: #ffffff;
+  --c-elevated-hover: #f0f2f5;
+  --c-placeholder: #e8eaee;
+  /* 阅读区固定深色：漫画本身才是主角，浅底会干扰读图 */
+  --c-sunken: #16161a;
+  --c-reader-bar: rgba(28, 28, 34, 0.9);
+
+  --c-border: #e3e6ea;
+  --c-border-strong: #d5d9df;
+
+  --c-text-1: #1f2329;
+  --c-text-2: #5b6169;
+  --c-text-3: #868d96;
+  --c-text-4: #a6acb4;
+
+  --c-accent: #12a37a;
+  --c-accent-2: #2f7fd4;
+  --c-accent-fg: #ffffff;
+  --c-accent-soft: #e6f5f0;
+  --c-accent-border: #a8d8c8;
+  --c-accent-2-soft: #e8f1fb;
+  --c-accent-2-border: #a9c9ea;
+  --c-accent-on: #ffffff;
+
+  --c-pill: #12a37a;
+  --c-selected: #eaf6f2;
+  --c-picked: #dff1ea;
+  --c-active-border: #7fc0ab;
+  --c-danger: #d95050;
+  --c-error-text: #c53b3b;
+  --c-warn-bg: #e8b64c;
+  --c-warn-fg: #2a1f00;
+  --c-title-fg: #10141a;
+
+  --c-hero-a: rgba(18, 163, 122, 0.1);
+  --c-hero-b: rgba(47, 127, 212, 0.08);
+  --c-mask: rgba(0, 0, 0, 0.6);
+  --c-scroll: #c8cdd4;
+  --c-scroll-hover: #aeb5bd;
+}
+
+body {
+  font-family:
+    'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Segoe UI', system-ui, sans-serif;
+  background: var(--c-app);
+  color: var(--c-text-1);
+  overflow: hidden;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-scroll);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--c-scroll-hover);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.page {
+  padding: 18px 22px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.page-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 14px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.empty {
+  color: var(--c-text-3);
+  text-align: center;
+  padding: 48px 0;
+  font-size: 13px;
+}
