@@ -1,6 +1,7 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
+import { version } from './package.json'
 
 export default defineConfig({
   main: {
@@ -35,6 +36,7 @@ export default defineConfig({
     }
   },
   renderer: {
+    define: { __APP_VERSION__: JSON.stringify(version) },
     root: resolve(__dirname, 'src/renderer'),
     resolve: {
       alias: {

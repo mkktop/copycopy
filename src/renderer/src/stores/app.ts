@@ -39,7 +39,10 @@ export const useAppStore = defineStore('app', () => {
     const root = paths.value?.out
     if (!absPath || !root) return null
     const rel = absPath.startsWith(root) ? absPath.slice(root.length) : absPath
-    const segments = rel.split(/[\\/]+/).filter(Boolean).map(encodeURIComponent)
+    const segments = rel
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .map(encodeURIComponent)
     return segments.length ? `${LIBRARY_SCHEME}://local/${segments.join('/')}` : null
   }
 

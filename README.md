@@ -3,6 +3,19 @@
 基于 Python 版 [mkk_comic](https://github.com/mkktop/mkk_comic) 移植的 Electron 桌面应用，
 在原 CLI 功能之上补了图形界面、下载队列和本地漫画库。
 
+## 1.2 桌面体验
+
+界面整理为「发现漫画、我的书架、追更订阅、下载管理、广告整理」五个工作区，配合固定侧边导航。
+浅色、深色和跟随系统均可使用；下载任务按状态筛选，设置按用途分组，追更订阅可以独立管理。
+
+设置使用独立草稿，保存后才影响运行配置；从详情返回会保留搜索结果。阅读器支持正确换章、恢复上次阅读章节，
+AI 检测的失败章节也可以正常重试。
+
+详细交互、修复项目及验证方式见 [桌面体验整理](docs/desktop-refresh.md)。
+
+开发验证：`npm run typecheck`、`npm run format:check`、`npm test`、`npm run test:ui`。
+GitHub Actions 会验证 Linux / Windows，并生成可下载的 Windows 安装包和便携版构建产物。
+
 ## 功能
 
 - **搜索**：按名称/作者搜索拷贝漫画（CopyManga），封面卡片浏览

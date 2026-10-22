@@ -1,455 +1,613 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { NButton, NCheckbox, NIcon, NInputNumber, NSpin, NTag, useMessage } from 'naive-ui'
 import {
-  NButton,
-  NCheckbox,
-  NDivider,
-  NEmpty,
-  NInputNumber,
-  NSpace,
-  NSpin,
-  NTag,
-  NText,
-  useMessage,
-  useDialog
-} from 'naive-ui'
-import type { ChapterItem, ChapterListResult, ComicDetail } from '@shared/types'
+  ArrowBackOutline,
+  BookmarkOutline,
+  CloudDownloadOutline,
+  CheckmarkOutline
+} from '@vicons/ionicons5'
+import type { ChapterItem, ComicDetail } from '@shared/types'
 import type { EnqueuePayload } from '@shared/ipc'
 import { useAppStore } from '../stores/app'
+import { useDownloadStore } from '../stores/download'
+import ComicCover from '../components/ComicCover.vue'
+import EmptyState from '../components/EmptyState.vue'
 
-const route = useRoute()
-const message = useMessage()
-const dialog = useDialog()
 const app = useAppStore()
-
+const dl = useDownloadStore()
+const route = useRoute()
+const router = useRouter()
+const message = useMessage()
 const PAGE_SIZE = 50
-
+const pathWord = computed(() => String(route.params.pathWord || ''))
 const detail = ref<ComicDetail | null>(null)
 const chapters = ref<ChapterItem[]>([])
 const total = ref(0)
 const page = ref(1)
 const loadingDetail = ref(false)
 const loadingChapters = ref(false)
-const errorMsg = ref('')
-
-/** 勾选的章节：key 是全局章节序号（1 起） */
-const selected = ref<Set<number>>(new Set())
+const error = ref('')
+const chapterError = ref('')
+const selected = ref(new Set<number>())
 const rangeStart = ref<number | null>(null)
 const rangeEnd = ref<number | null>(null)
 const trackAfter = ref(false)
 const enqueueing = ref(false)
+const subscribing = ref(false)
 const briefExpanded = ref(false)
-
-const pathWord = computed(() => String(route.params.pathWord ?? ''))
-const allPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
-/** 本页每个条目对应的全局序号 */
+const localState = ref<Record<string, boolean>>({})
+const cache = new Map<number, ChapterItem>()
+let detailSequence = 0
+let chapterSequence = 0
 const rows = computed(() =>
-  chapters.value.map((c, i) => ({ chapter: c, index: (page.value - 1) * PAGE_SIZE + i + 1 }))
+  chapters.value.map((chapter, index) => ({
+    chapter,
+    index: (page.value - 1) * PAGE_SIZE + index + 1
+  }))
 )
-const selectedCount = computed(() => selected.value.size)
-const pageAllSelected = computed(
-  () => rows.value.length > 0 && rows.value.every((r) => selected.value.has(r.index))
+const allPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const allSelected = computed(
+  () => rows.value.length > 0 && rows.value.every((row) => selected.value.has(row.index))
 )
-
-/**
- * 本地漫画库里这部漫画的章节状态：目录名 -> 是否完整。
- * 应用明明知道 out/ 里下过什么，章节列表却长得一模一样，
- * 只能盲选、然后靠"秒完成"反推。这里直接把状态标出来。
- */
-const localState = ref<Record<string, { complete: boolean; pageCount: number }>>({})
-
-async function loadLocalState(): Promise<void> {
-  try {
-    const list = await window.mkk.libraryList()
-    const c = list.find((x) => x.name === (detail.value?.name ?? ''))
-    if (!c) {
-      localState.value = {}
-      return
-    }
-    const map: Record<string, { complete: boolean; pageCount: number }> = {}
-    for (const ch of c.chapters) map[ch.name] = { complete: ch.complete !== false, pageCount: ch.pageCount }
-    localState.value = map
-  } catch {
-    localState.value = {}
-  }
-}
-
-const downloadedCount = computed(() => Object.keys(localState.value).length)
-
-function stateOf(name: string): 'none' | 'ok' | 'partial' {
-  const s = localState.value[name]
-  if (!s) return 'none'
-  return s.complete ? 'ok' : 'partial'
-}
+const subscribed = computed(() => app.config?.comics.some((comic) => comic.path === pathWord.value))
 
 async function loadDetail(): Promise<void> {
+  const request = ++detailSequence
+  const path = pathWord.value
   loadingDetail.value = true
-  errorMsg.value = ''
+  error.value = ''
   try {
-    const res = await window.mkk.comic(pathWord.value)
-    if (!res.ok) {
-      errorMsg.value = res.error
-      detail.value = null
-      return
+    const result = await window.mkk.comic(path)
+    if (request !== detailSequence) return
+    if (!result.ok) throw new Error(result.error)
+    detail.value = result.data
+    try {
+      const library = await window.mkk.libraryList()
+      if (request !== detailSequence) return
+      const comic = library.find(
+        (item) => item.meta?.pathWord === path || item.name === result.data.name
+      )
+      localState.value = Object.fromEntries(
+        comic?.chapters.map((chapter) => [chapter.name, chapter.complete !== false]) || []
+      )
+    } catch {
+      /* 站点详情仍可使用 */
     }
-    detail.value = res.data
-    void loadLocalState()
+  } catch (cause) {
+    if (request === detailSequence) error.value = String(cause)
   } finally {
-    loadingDetail.value = false
+    if (request === detailSequence) loadingDetail.value = false
   }
 }
-
-async function loadChapters(p = 1): Promise<void> {
+async function loadChapters(next = 1): Promise<void> {
+  const request = ++chapterSequence
   loadingChapters.value = true
+  chapterError.value = ''
   try {
-    const res = await window.mkk.chapters(pathWord.value, p)
-    if (!res.ok) {
-      message.error('获取章节列表失败：' + res.error)
-      return
-    }
-    const data: ChapterListResult = res.data
-    chapters.value = data.list ?? []
-    total.value = data.total ?? 0
-    page.value = data.offset / PAGE_SIZE + 1
+    const result = await window.mkk.chapters(pathWord.value, next)
+    if (request !== chapterSequence) return
+    if (!result.ok) throw new Error(result.error)
+    chapters.value = result.data.list || []
+    total.value = result.data.total || 0
+    page.value = Math.floor(result.data.offset / PAGE_SIZE) + 1
+    result.data.list.forEach((chapter, index) => cache.set(result.data.offset + index + 1, chapter))
+  } catch (cause) {
+    if (request === chapterSequence) chapterError.value = String(cause)
   } finally {
-    loadingChapters.value = false
+    if (request === chapterSequence) loadingChapters.value = false
   }
 }
-
 function toggle(index: number): void {
   const next = new Set(selected.value)
   if (next.has(index)) next.delete(index)
   else next.add(index)
   selected.value = next
 }
-
 function togglePage(): void {
   const next = new Set(selected.value)
-  if (pageAllSelected.value) rows.value.forEach((r) => next.delete(r.index))
-  else rows.value.forEach((r) => next.add(r.index))
+  const remove = allSelected.value
+  rows.value.forEach((row) => (remove ? next.delete(row.index) : next.add(row.index)))
   selected.value = next
 }
-
+function selectMissing(): void {
+  const next = new Set(selected.value)
+  rows.value
+    .filter((row) => localState.value[row.chapter.name] !== true)
+    .forEach((row) => next.add(row.index))
+  selected.value = next
+}
 function selectRange(): void {
-  if (!rangeStart.value || !rangeEnd.value) {
-    message.warning('请填写起始与结束章节')
+  if (
+    !rangeStart.value ||
+    !rangeEnd.value ||
+    !Number.isInteger(rangeStart.value) ||
+    !Number.isInteger(rangeEnd.value)
+  ) {
+    message.warning('请填写完整的章节范围')
     return
   }
-  const a = Math.max(1, Math.min(rangeStart.value, rangeEnd.value))
-  const b = Math.min(total.value, Math.max(rangeStart.value, rangeEnd.value))
+  const first = Math.max(1, Math.min(rangeStart.value, rangeEnd.value))
+  const last = Math.min(total.value, Math.max(rangeStart.value, rangeEnd.value))
   const next = new Set(selected.value)
-  for (let i = a; i <= b; i++) next.add(i)
+  for (let index = first; index <= last; index++) next.add(index)
   selected.value = next
-  message.success(`已选择第 ${a} ~ ${b} 章`)
 }
-
-function clearSelection(): void {
-  selected.value = new Set()
-}
-
-/** 一键选中本地还没有的章节——重追、续下最常用的操作 */
-function selectUndownloaded(): void {
-  const next = new Set(selected.value)
-  let added = 0
-  for (const r of rows.value) {
-    if (stateOf(r.chapter.name) === 'none') {
-      next.add(r.index)
-      added++
-    }
+async function subscribe(): Promise<void> {
+  if (!detail.value || subscribing.value) return
+  subscribing.value = true
+  try {
+    app.config = await window.mkk.subscribe({
+      name: detail.value.name,
+      path: pathWord.value
+    })
+    message.success('已加入追更，可在「追更订阅」管理')
+  } catch (cause) {
+    message.error('订阅失败：' + String(cause))
+  } finally {
+    subscribing.value = false
   }
-  selected.value = next
-  message.success(added > 0 ? `已选中 ${added} 个未下载的章节` : '本页章节都已经有了')
 }
-
 async function enqueue(): Promise<void> {
-  if (selected.value.size === 0) {
-    message.warning('请先选择章节')
-    return
-  }
-  const indexes = [...selected.value].sort((x, y) => x - y)
-
-  dialog.warning({
-    title: '确认下载',
-    content: `即将下载 ${indexes.length} 章《${detail.value?.name ?? ''}》，确认加入队列？`,
-    positiveText: '加入队列',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      enqueueing.value = true
-      try {
-        // 需要跨页取章节信息，逐页补齐 uuid
-        const byIndex = new Map<number, ChapterItem>()
-        const firstPage = Math.floor((indexes[0] - 1) / PAGE_SIZE) + 1
-        const lastPage = Math.floor((indexes[indexes.length - 1] - 1) / PAGE_SIZE) + 1
-        for (let p = firstPage; p <= lastPage; p++) {
-          const res = await window.mkk.chapters(pathWord.value, p)
-          if (!res.ok) continue
-          const offset = res.data.offset
-          res.data.list.forEach((c, i) => byIndex.set(offset + i + 1, c))
-        }
-
-        const payload: EnqueuePayload[] = []
-        for (const i of indexes) {
-          const c = byIndex.get(i)
-          if (!c) continue
-          payload.push({
-            comicPath: pathWord.value,
-            comicName: detail.value?.name ?? '',
-            chapterIndex: i,
-            chapterName: c.name,
-            uuid: c.uuid,
-            trackSubscription: trackAfter.value
-          })
-        }
-
-        if (payload.length === 0) {
-          message.error('未能获取到章节信息，请重试')
-          return
-        }
-
-        if (trackAfter.value) {
-          await window.mkk.subscribe(
-            { name: detail.value?.name ?? '', path: pathWord.value },
-            Math.max(payload.length, 10)
-          )
-        }
-
-        const created = await window.mkk.enqueue(payload)
-        message.success(`已加入队列 ${created.length} 章`)
-        selected.value = new Set()
-        // 已经下过的章节现在会标出来，刷新一下本地状态
-        void loadLocalState()
-      } finally {
-        enqueueing.value = false
-      }
+  if (!detail.value || !selected.value.size || enqueueing.value) return
+  const path = pathWord.value
+  const name = detail.value.name
+  const track = trackAfter.value
+  const indexes = [...selected.value].sort((a, b) => a - b)
+  const byIndex = new Map(cache)
+  enqueueing.value = true
+  try {
+    // 只获取实际勾选且未缓存的页，跨页失败时保留整个选择，避免悄悄漏章。
+    const neededPages = [
+      ...new Set(
+        indexes
+          .filter((index) => !byIndex.has(index))
+          .map((index) => Math.floor((index - 1) / PAGE_SIZE) + 1)
+      )
+    ]
+    for (const next of neededPages) {
+      const result = await window.mkk.chapters(path, next)
+      if (!result.ok) throw new Error(`第 ${next} 页章节获取失败：${result.error}`)
+      result.data.list.forEach((chapter, offset) =>
+        byIndex.set(result.data.offset + offset + 1, chapter)
+      )
     }
-  })
+    const payload: EnqueuePayload[] = indexes.map((index) => {
+      const chapter = byIndex.get(index)
+      if (!chapter) throw new Error(`未能获取第 ${index} 章，请刷新章节后重试`)
+      return {
+        comicPath: path,
+        comicName: name,
+        chapterIndex: index,
+        chapterName: chapter.name,
+        uuid: chapter.uuid,
+        trackSubscription: track
+      }
+    })
+    if (track) app.config = await window.mkk.subscribe({ name, path })
+    const created = await window.mkk.enqueue(payload)
+    await dl.refresh()
+    message.success(
+      created.length ? `${created.length} 个章节已加入下载管理` : '所选章节已经在下载队列中'
+    )
+    if (pathWord.value === path)
+      selected.value = new Set([...selected.value].filter((index) => !indexes.includes(index)))
+  } catch (cause) {
+    message.error('添加失败：' + String(cause))
+  } finally {
+    enqueueing.value = false
+  }
 }
-
-async function subscribeOnly(): Promise<void> {
-  await window.mkk.subscribe({ name: detail.value?.name ?? '', path: pathWord.value })
-  message.success('已加入追更订阅，可在设置页检查更新')
-}
-
-watch(pathWord, () => {
-  selected.value = new Set()
-  void loadDetail()
-  void loadChapters(1)
-})
-
-onMounted(() => {
-  void loadDetail()
-  void loadChapters(1)
+watch(
+  pathWord,
+  () => {
+    detail.value = null
+    chapters.value = []
+    selected.value = new Set()
+    cache.clear()
+    total.value = 0
+    page.value = 1
+    localState.value = {}
+    rangeStart.value = null
+    rangeEnd.value = null
+    briefExpanded.value = false
+    void loadDetail()
+    void loadChapters()
+  },
+  { immediate: true }
+)
+onBeforeUnmount(() => {
+  detailSequence++
+  chapterSequence++
 })
 </script>
 
 <template>
-  <div class="page">
-    <NSpin :show="loadingDetail">
-      <div v-if="detail" class="head">
-        <div class="head-cover">
-          <img v-if="app.remoteImg(detail.cover)" :src="app.remoteImg(detail.cover)!" alt="" />
-        </div>
-        <div class="head-info">
-          <h2 class="page-title" style="margin-bottom: 6px">
-            {{ detail.name }}
-            <NTag v-if="detail.alias" size="small" :bordered="false" style="margin-left: 8px">
-              {{ detail.alias }}
-            </NTag>
-          </h2>
-          <NText depth="3" style="font-size: 12px">
-            更新于 {{ detail.datetime_updated }} · 最新章节 {{ detail.last_chapter?.name ?? '未知' }}
-            · 共 {{ total }} 章
-          </NText>
-          <p class="brief" :class="{ clamped: !briefExpanded }" @click="briefExpanded = !briefExpanded">
-            {{ detail.brief || '暂无简介' }}
-          </p>
-          <div class="head-actions">
-            <NButton size="small" @click="subscribeOnly">加入追更订阅</NButton>
-            <NButton
-              size="small"
-              quaternary
-              :disabled="!detail.brief"
-              @click="briefExpanded = !briefExpanded"
-            >
-              {{ briefExpanded ? '收起简介' : '展开简介' }}
-            </NButton>
+  <div class="page detail-page">
+    <div class="content-width">
+      <NButton quaternary size="small" class="back-button" @click="router.push('/search')">
+        <template #icon><NIcon :component="ArrowBackOutline" /></template>
+        返回发现漫画
+      </NButton>
+      <NSpin :show="loadingDetail">
+        <section v-if="detail" class="comic-hero surface">
+          <div class="hero-cover">
+            <ComicCover :src="app.remoteImg(detail.cover)" :name="detail.name" />
           </div>
-        </div>
+          <div class="hero-info">
+            <div class="eyebrow">COMIC DETAILS</div>
+            <h1>{{ detail.name }}</h1>
+            <p v-if="detail.alias" class="comic-alias">{{ detail.alias }}</p>
+            <div class="comic-facts">
+              <span>{{ total }} 个章节</span>
+              <span>更新于 {{ detail.datetime_updated || '未知' }}</span>
+              <span v-if="Object.keys(localState).length">
+                本地已有 {{ Object.keys(localState).length }} 章
+              </span>
+            </div>
+            <p class="brief" :class="{ clamped: !briefExpanded }">
+              {{ detail.brief || '这个故事还没有简介。' }}
+            </p>
+            <div class="hero-actions">
+              <NButton :disabled="subscribed" :loading="subscribing" @click="subscribe">
+                <template #icon>
+                  <NIcon :component="subscribed ? CheckmarkOutline : BookmarkOutline" />
+                </template>
+                {{ subscribed ? '已加入追更' : '加入追更' }}
+              </NButton>
+              <NButton
+                v-if="detail.brief"
+                quaternary
+                size="small"
+                @click="briefExpanded = !briefExpanded"
+              >
+                {{ briefExpanded ? '收起简介' : '展开简介' }}
+              </NButton>
+            </div>
+          </div>
+        </section>
+        <EmptyState v-else-if="error" title="漫画详情加载失败" :description="error">
+          <NButton @click="loadDetail">重试</NButton>
+        </EmptyState>
+      </NSpin>
+      <div class="section-heading">
+        <h2>
+          章节目录
+          <span class="chapter-total">{{ total }} 章</span>
+        </h2>
+        <span class="selection-hint">跨页勾选会保留，下载后自动跳过已有图片</span>
       </div>
-
-      <div v-else-if="errorMsg" class="empty">加载失败：{{ errorMsg }}</div>
-    </NSpin>
-
-    <NDivider v-if="chapters.length" />
-
-    <div v-if="chapters.length" class="toolbar">
-      <NButton size="small" @click="togglePage">
-        {{ pageAllSelected ? '取消本页' : '选择本页' }}
-      </NButton>
-      <NButton size="small" @click="clearSelection">清空选择</NButton>
-      <NButton size="small" quaternary @click="selectUndownloaded">
-        只选未下载的
-      </NButton>
-      <NText depth="3" class="meta-text">已选 {{ selectedCount }} 章</NText>
-      <NTag v-if="downloadedCount" size="tiny" type="success" :bordered="false">
-        本地已有 {{ downloadedCount }} 章
-      </NTag>
-
-      <NSpace :size="6" align="center">
-        <NInputNumber v-model:value="rangeStart" :min="1" :max="total" size="small" placeholder="起" style="width: 90px" />
-        <span>~</span>
-        <NInputNumber v-model:value="rangeEnd" :min="1" :max="total" size="small" placeholder="止" style="width: 90px" />
-        <NButton size="small" @click="selectRange">选择区间</NButton>
-      </NSpace>
-
-      <NSpace :size="8" align="center">
-        <NCheckbox v-model:checked="trackAfter">同时加入追更</NCheckbox>
-        <NButton type="primary" size="small" :loading="enqueueing" :disabled="selectedCount === 0" @click="enqueue">
-          加入下载队列
-        </NButton>
-      </NSpace>
-    </div>
-
-    <NSpin :show="loadingChapters">
-      <div v-if="chapters.length" class="chapter-list">
-        <div
-          v-for="r in rows"
-          :key="r.chapter.uuid"
-          class="chapter"
-          :class="{ picked: selected.has(r.index), owned: stateOf(r.chapter.name) !== 'none' }"
-          @click="toggle(r.index)"
+      <div class="chapter-toolbar">
+        <div>
+          <NButton size="small" :disabled="loadingChapters || !chapters.length" @click="togglePage">
+            {{ allSelected ? '取消本页选择' : '选择本页' }}
+          </NButton>
+          <NButton
+            size="small"
+            quaternary
+            :disabled="loadingChapters || !chapters.length"
+            @click="selectMissing"
+          >
+            选择本页待下载
+          </NButton>
+        </div>
+        <details class="range-picker">
+          <summary>按区间选择</summary>
+          <div class="range-fields surface">
+            <NInputNumber
+              v-model:value="rangeStart"
+              :min="1"
+              :max="total"
+              placeholder="起始章"
+              size="small"
+              aria-label="起始章节"
+            />
+            <span>至</span>
+            <NInputNumber
+              v-model:value="rangeEnd"
+              :min="1"
+              :max="total"
+              placeholder="结束章"
+              size="small"
+              aria-label="结束章节"
+            />
+            <NButton size="small" @click="selectRange">选择</NButton>
+          </div>
+        </details>
+      </div>
+      <NSpin :show="loadingChapters">
+        <EmptyState
+          v-if="chapterError"
+          title="章节列表加载失败"
+          :description="chapterError"
+          compact
         >
-          <span class="idx">第 {{ r.index }} 章</span>
-          <span class="name" :title="r.chapter.name">{{ r.chapter.name }}</span>
-          <NTag v-if="stateOf(r.chapter.name) === 'ok'" size="tiny" type="success" :bordered="false">
-            已下载
-          </NTag>
-          <NTag v-else-if="stateOf(r.chapter.name) === 'partial'" size="tiny" type="warning" :bordered="false">
-            缺页
-          </NTag>
-          <NText depth="3" style="font-size: 12px; min-width: 46px; text-align: right">
-            {{ r.chapter.size }} P
-          </NText>
+          <NButton @click="loadChapters(page)">重新加载</NButton>
+        </EmptyState>
+        <div v-else-if="chapters.length" class="chapter-grid">
+          <button
+            v-for="row in rows"
+            :key="row.chapter.uuid"
+            type="button"
+            role="checkbox"
+            :aria-checked="selected.has(row.index)"
+            :aria-label="`第 ${row.index} 章 ${row.chapter.name}`"
+            :disabled="enqueueing || loadingChapters"
+            class="chapter"
+            :class="{ picked: selected.has(row.index) }"
+            @click="toggle(row.index)"
+          >
+            <span class="chapter-checkbox">
+              <NIcon v-if="selected.has(row.index)" :component="CheckmarkOutline" :size="13" />
+            </span>
+            <span class="chapter-index">{{ String(row.index).padStart(2, '0') }}</span>
+            <span class="chapter-name" :title="row.chapter.name">{{ row.chapter.name }}</span>
+            <NTag
+              v-if="localState[row.chapter.name] === true"
+              size="tiny"
+              :bordered="false"
+              type="success"
+            >
+              已下载
+            </NTag>
+            <NTag
+              v-else-if="localState[row.chapter.name] === false"
+              size="tiny"
+              :bordered="false"
+              type="warning"
+            >
+              缺页
+            </NTag>
+            <span class="chapter-pages">{{ row.chapter.size }} 页</span>
+          </button>
         </div>
+        <EmptyState
+          v-else-if="!loadingChapters"
+          title="暂时没有章节"
+          description="可以先加入追更，等待故事更新。"
+          compact
+        />
+      </NSpin>
+      <div v-if="allPages > 1" class="pager">
+        <NButton
+          size="small"
+          :disabled="page <= 1 || loadingChapters"
+          @click="loadChapters(page - 1)"
+        >
+          上一页
+        </NButton>
+        <span>{{ page }} / {{ allPages }}</span>
+        <NButton
+          size="small"
+          :disabled="page >= allPages || loadingChapters"
+          @click="loadChapters(page + 1)"
+        >
+          下一页
+        </NButton>
       </div>
-      <NEmpty v-else-if="!loadingChapters" description="没有章节信息" class="empty" />
-    </NSpin>
-
-    <div v-if="allPages > 1" class="pager">
-      <NButton :disabled="page <= 1" size="small" @click="loadChapters(page - 1)">上一页</NButton>
-      <span>{{ page }} / {{ allPages }}</span>
-      <NButton :disabled="page >= allPages" size="small" @click="loadChapters(page + 1)">
-        下一页
-      </NButton>
+      <footer v-if="detail && total" class="selection-bar surface">
+        <div>
+          <strong>{{ selected.size }}</strong>
+          <span>个章节已选</span>
+          <NButton
+            v-if="selected.size"
+            quaternary
+            size="tiny"
+            :disabled="enqueueing"
+            @click="selected = new Set()"
+          >
+            清空
+          </NButton>
+        </div>
+        <div>
+          <NCheckbox v-model:checked="trackAfter" :disabled="enqueueing">同时加入追更</NCheckbox>
+          <NButton type="primary" :disabled="!selected.size" :loading="enqueueing" @click="enqueue">
+            <template #icon><NIcon :component="CloudDownloadOutline" /></template>
+            下载所选章节
+          </NButton>
+        </div>
+      </footer>
     </div>
   </div>
 </template>
 
 <style scoped>
-.head {
+.back-button {
+  margin: -8px 0 18px -8px;
+}
+.comic-hero {
   display: flex;
-  gap: 18px;
+  align-items: center;
+  gap: 30px;
+  padding: 28px;
 }
-
-.head-cover {
-  width: 150px;
-  flex: 0 0 150px;
-  aspect-ratio: 3 / 4;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--c-placeholder);
+.hero-cover {
+  width: 152px;
+  flex-shrink: 0;
 }
-
-.head-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.head-info {
-  flex: 1;
+.hero-info {
   min-width: 0;
+  flex: 1;
 }
-
+.hero-info h1 {
+  font-size: 25px;
+  font-weight: 650;
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+.comic-alias {
+  font-size: 11px;
+  color: var(--c-text-3);
+  margin: 0 0 9px;
+}
+.comic-facts {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: var(--c-text-3);
+}
 .brief {
+  margin: 14px 0;
+  font-size: 12px;
   color: var(--c-text-2);
-  font-size: 13px;
-  line-height: 1.7;
-  margin: 10px 0;
-  cursor: pointer;
+  line-height: 1.9;
+  white-space: pre-wrap;
 }
-/* 折叠态用 -webkit-line-clamp，不要 max-height+滚动：
-   内嵌滚动条会把下面的工具条挤得很难看 */
 .brief.clamped {
   display: -webkit-box;
   -webkit-line-clamp: 3;
-  line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-
-.head-actions {
+.hero-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
 }
-
-.meta-text {
-  font-size: 13px;
-  color: var(--c-text-2);
+.chapter-total {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--c-text-3);
+  margin-left: 12px;
 }
-
-.chapter-list {
+.selection-hint {
+  font-size: 10px;
+  color: var(--c-text-3);
+}
+.chapter-toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
 }
-
-.chapter {
+.chapter-toolbar > div {
+  display: flex;
+  gap: 7px;
+}
+.range-picker {
+  position: relative;
+  color: var(--c-text-2);
+  font-size: 11px;
+  align-self: center;
+}
+.range-picker summary {
+  cursor: pointer;
+}
+.range-fields {
+  position: absolute;
+  right: 0;
+  top: 30px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 15px;
+  width: 360px;
+  box-shadow: 0 8px 24px #0001;
+}
+.chapter-grid {
   display: grid;
-  grid-template-columns: 80px 1fr auto auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 12px;
+}
+.chapter {
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: var(--c-elevated);
-  border: 1px solid transparent;
+  padding: 15px 13px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
   cursor: pointer;
-  font-size: 13px;
+  text-align: left;
+  min-width: 0;
 }
-.chapter.owned {
-  background: var(--c-selected);
-}
-
 .chapter:hover {
-  background: var(--c-elevated-hover);
+  border-color: var(--c-accent-border);
 }
-
+.chapter:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
 .chapter.picked {
-  border-color: var(--c-accent);
   background: var(--c-selected);
+  border-color: var(--c-accent-border);
 }
-
-.idx {
+.chapter-checkbox {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--c-border-strong);
+  flex-shrink: 0;
+}
+.picked .chapter-checkbox {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-accent-fg);
+}
+.chapter-index {
+  font-size: 10px;
   color: var(--c-text-3);
+  min-width: 19px;
   font-variant-numeric: tabular-nums;
 }
-
-.name {
+.chapter-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
-
-.pager {
+.chapter-pages {
+  font-size: 10px;
+  color: var(--c-text-3);
+  white-space: nowrap;
+}
+.selection-bar {
+  position: sticky;
+  bottom: -20px;
+  z-index: 4;
+  margin-top: 24px;
+  padding: 16px 20px;
   display: flex;
-  gap: 12px;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  margin-top: 18px;
-  font-size: 13px;
+  gap: 12px;
+  border-radius: 12px;
+  box-shadow: 0 -4px 20px #00000006;
+}
+.selection-bar > div {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+}
+.selection-bar strong {
+  font-size: 22px;
+  color: var(--c-accent);
+}
+.selection-bar > div:first-child > span {
   color: var(--c-text-2);
+}
+@media (max-width: 1050px) {
+  .comic-hero {
+    gap: 22px;
+    padding: 22px;
+  }
+  .hero-cover {
+    width: 125px;
+  }
+  .selection-hint {
+    display: none;
+  }
+  .chapter {
+    padding: 12px 10px;
+    gap: 7px;
+  }
 }
 </style>

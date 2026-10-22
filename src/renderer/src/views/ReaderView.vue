@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NIcon, NSelect, NSpace, NTag, NText, useMessage } from 'naive-ui'
+import {
+  darkTheme,
+  NConfigProvider,
+  NButton,
+  NIcon,
+  NSelect,
+  NSpace,
+  NTag,
+  NText,
+  useMessage
+} from 'naive-ui'
 import {
   ChevronBackOutline,
   ChevronForwardOutline,
@@ -25,8 +35,8 @@ const router = useRouter()
 const message = useMessage()
 const app = useAppStore()
 
-const comicName = computed(() => decodeURIComponent(String(route.params.name ?? '')))
-const chapterName = computed(() => decodeURIComponent(String(route.params.chapter ?? '')))
+const comicName = computed(() => String(route.params.name ?? ''))
+const chapterName = computed(() => String(route.params.chapter ?? ''))
 
 const comic = ref<LibraryComic | null>(null)
 const chapter = ref<LibraryChapter | null>(null)
@@ -92,22 +102,35 @@ function loadPos(): number {
 
 /* ---------- 加载 ---------- */
 
+let loadSequence = 0
 async function load(): Promise<void> {
+  const request = ++loadSequence
+  const name = comicName.value
+  const chapterTitle = chapterName.value
   loading.value = true
   page.value = 1
   files.value = []
   try {
     const list = await window.mkk.libraryList()
-    const c = list.find((x) => x.name === comicName.value) ?? null
+    if (request !== loadSequence) return
+    const c = list.find((x) => x.name === name) ?? null
     comic.value = c
-    chapter.value = c?.chapters.find((x) => x.name === chapterName.value) ?? null
+    chapter.value = c?.chapters.find((x) => x.name === chapterTitle) ?? null
     if (!c || !chapter.value) return
 
     const fs = await window.mkk.chapterFiles(chapter.value.dir)
+    if (request !== loadSequence) return
     files.value = fs
     page.value = Math.min(loadPos(), Math.max(1, fs.length))
+    try {
+      localStorage.setItem('copycopy.lastChapter:' + name, chapterTitle)
+    } catch {
+      /* 阅读不依赖位置写入 */
+    }
+  } catch (cause) {
+    if (request === loadSequence) message.error('章节加载失败：' + String(cause))
   } finally {
-    loading.value = false
+    if (request === loadSequence) loading.value = false
   }
 }
 
@@ -119,6 +142,7 @@ function go(delta: number): void {
 }
 
 function goto(n: number): void {
+  if (!files.value.length) return
   const next = Math.min(Math.max(1, Math.trunc(n)), files.value.length)
   if (next === page.value) return
   page.value = next
@@ -128,7 +152,16 @@ function goto(n: number): void {
 /* ---------- 快捷键 ---------- */
 
 function onKey(e: KeyboardEvent): void {
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+  if (
+    (e.target instanceof Element &&
+      e.target.closest(
+        'input,textarea,button,select,[contenteditable="true"],[role="combobox"]'
+      )) ||
+    e.ctrlKey ||
+    e.metaKey ||
+    e.altKey
+  )
+    return
   switch (e.key) {
     case 'ArrowRight':
     case 'ArrowDown':
@@ -157,8 +190,6 @@ function onKey(e: KeyboardEvent): void {
       e.preventDefault()
       hideBar()
       router.push('/library/' + encodeURIComponent(comicName.value))
-      break
-    case 'PageUp':
       break
     case 'n':
     case 'N':
@@ -221,9 +252,7 @@ const nextChapter = computed<LibraryChapter | null>(() => {
 
 function goChapter(target: LibraryChapter | null): void {
   if (!target) return
-  router.push(
-    `/library/${encodeURIComponent(comicName.value)}/${encodeURIComponent(target.name)}`
-  )
+  router.push(`/library/${encodeURIComponent(comicName.value)}/${encodeURIComponent(target.name)}`)
 }
 
 /** 翻页后预热后面的图，滚过去时是秒开 */
@@ -236,129 +265,167 @@ function prefetch(around: number): void {
   }
 }
 
-watch(page, (p) => prefetch(p))
+watch(page, (p) => {
+  prefetch(p)
+  document.querySelector('.stage')?.scrollTo({ top: 0, left: 0 })
+})
+watch(
+  [comicName, chapterName],
+  () => {
+    void load()
+    pokeBar()
+  },
+  { immediate: true }
+)
 
 onMounted(() => {
   window.addEventListener('keydown', onKey)
-  void load()
   // 打开时先把工具条亮 3 秒，让人看清有哪些操作，之后自动收起
   pokeBar()
 })
 
 onBeforeUnmount(() => {
+  loadSequence++
   window.removeEventListener('keydown', onKey)
   if (barTimer) clearTimeout(barTimer)
 })
 </script>
 
 <template>
-  <div class="reader" @mousemove="pokeBar" @click="pokeBar">
-    <!-- 工具条 -->
-    <div class="bar" :class="{ hidden: !showBar }">
-      <NSpace align="center" :size="10">
-        <NButton quaternary size="small" @click.stop="router.push('/library')">
-          <template #icon><n-icon :component="CloseOutline" /></template>
-          返回
-        </NButton>
-        <NButton
-          size="small"
-          quaternary
-          :disabled="!prevChapter"
-          @click.stop="goChapter(prevChapter)"
-        >
-          <template #icon><n-icon :component="ChevronBackOutline" /></template>
-          上一章
-        </NButton>
-        <NText depth="2" class="title-text">
-          {{ comic?.name ?? comicName }} · {{ chapter?.name ?? chapterName }}
-        </NText>
-        <NButton
-          size="small"
-          quaternary
-          :disabled="!nextChapter"
-          @click.stop="goChapter(nextChapter)"
-        >
-          下一章
-          <template #icon><n-icon :component="ChevronForwardOutline" /></template>
-        </NButton>
-        <NTag v-if="chapter?.complete === false" size="tiny" type="warning" :bordered="false">
-          本章有缺页
-        </NTag>
-      </NSpace>
+  <NConfigProvider
+    :theme="darkTheme"
+    :theme-overrides="{
+      common: {
+        textColor1: '#e7e9f4',
+        textColor2: '#b0b6cc',
+        textColor3: '#9099b2',
+        primaryColor: '#aba0ff',
+        borderColor: '#343848'
+      }
+    }"
+  >
+    <div class="reader" @mousemove="pokeBar" @click="pokeBar">
+      <!-- 工具条 -->
+      <div class="bar" :class="{ hidden: !showBar }">
+        <NSpace align="center" :size="10">
+          <NButton
+            quaternary
+            size="small"
+            @click.stop="router.push('/library/' + encodeURIComponent(comicName))"
+          >
+            <template #icon><n-icon :component="CloseOutline" /></template>
+            返回
+          </NButton>
+          <NButton
+            size="small"
+            quaternary
+            :disabled="!prevChapter"
+            @click.stop="goChapter(prevChapter)"
+          >
+            <template #icon><n-icon :component="ChevronBackOutline" /></template>
+            上一章
+          </NButton>
+          <NText depth="2" class="title-text">
+            {{ comic?.name ?? comicName }} · {{ chapter?.name ?? chapterName }}
+          </NText>
+          <NButton
+            size="small"
+            quaternary
+            :disabled="!nextChapter"
+            @click.stop="goChapter(nextChapter)"
+          >
+            下一章
+            <template #icon><n-icon :component="ChevronForwardOutline" /></template>
+          </NButton>
+          <NTag v-if="chapter?.complete === false" size="tiny" type="warning" :bordered="false">
+            本章有缺页
+          </NTag>
+        </NSpace>
 
-      <NSpace align="center" :size="10">
-        <NButton size="tiny" quaternary :disabled="page <= 1" @click.stop="go(-1)">
-          <template #icon><n-icon :component="ChevronUpOutline" /></template>
-        </NButton>
-        <NText depth="2" style="font-size: 12px; min-width: 78px; text-align: center">
-          {{ page }} / {{ files.length || '?' }}
-        </NText>
-        <NButton size="tiny" quaternary :disabled="page >= files.length" @click.stop="go(1)">
-          <template #icon><n-icon :component="ChevronDownOutline" /></template>
-        </NButton>
+        <NSpace align="center" :size="10">
+          <NButton size="tiny" quaternary :disabled="page <= 1" @click.stop="go(-1)">
+            <template #icon><n-icon :component="ChevronUpOutline" /></template>
+          </NButton>
+          <NText depth="2" style="font-size: 12px; min-width: 78px; text-align: center">
+            {{ page }} / {{ files.length || '?' }}
+          </NText>
+          <NButton size="tiny" quaternary :disabled="page >= files.length" @click.stop="go(1)">
+            <template #icon><n-icon :component="ChevronDownOutline" /></template>
+          </NButton>
 
-        <NSelect
-          v-model:value="fit"
-          :options="fitOptions"
-          size="tiny"
-          style="width: 96px"
-          @update:value="zoom = 1"
-        />
-        <NButton size="tiny" quaternary @click.stop="zoom = Math.max(0.3, zoom - 0.15)">−</NButton>
-        <NText depth="3" style="font-size: 11px; min-width: 38px; text-align: center">
-          {{ Math.round(zoom * 100) }}%
-        </NText>
-        <NButton size="tiny" quaternary @click.stop="zoom = Math.min(3, zoom + 0.15)">+</NButton>
-      </NSpace>
-    </div>
-
-    <!-- 正文 -->
-    <div class="stage" :class="fit" :style="{ '--zoom': zoom }" @click="onStageClick">
-      <div v-if="loading" class="hint">加载中…</div>
-      <div v-else-if="!files.length" class="hint">
-        {{ chapter ? '这一章还没有图片' : '找不到该章节' }}
-        <NButton size="tiny" quaternary style="margin-left: 8px" @click.stop="load">重试</NButton>
+          <NSelect
+            v-model:value="fit"
+            :options="fitOptions"
+            size="tiny"
+            style="width: 96px"
+            @update:value="zoom = 1"
+          />
+          <NButton size="tiny" quaternary @click.stop="zoom = Math.max(0.3, zoom - 0.15)">
+            −
+          </NButton>
+          <NText depth="3" style="font-size: 11px; min-width: 38px; text-align: center">
+            {{ Math.round(zoom * 100) }}%
+          </NText>
+          <NButton size="tiny" quaternary @click.stop="zoom = Math.min(3, zoom + 0.15)">+</NButton>
+        </NSpace>
       </div>
-      <template v-else>
-        <img
-          v-for="v in visible"
-          :key="v.index"
-          :src="src(v.file) ?? ''"
-          :class="{ 'is-current': v.index === page }"
-          :style="v.index === page ? undefined : { position: 'absolute', opacity: 0, pointerEvents: 'none' }"
-          alt=""
-          draggable="false"
-        />
-      </template>
-    </div>
 
-    <!-- 底部页码条 -->
-    <div class="foot" :class="{ hidden: !showBar }" @click.stop>
-      <input
-        class="slider"
-        type="range"
-        min="1"
-        :max="Math.max(1, files.length)"
-        :value="page"
-        @input="goto(Number(($event.target as HTMLInputElement).value))"
-      />
-      <div class="foot-row">
-        <NButton size="tiny" quaternary @click.stop="go(-1)" :disabled="page <= 1">
-          <template #icon><n-icon :component="ChevronBackOutline" /></template>
-        </NButton>
-        <NText depth="3" style="font-size: 11px">
-          ← → 翻页 · 空格 下一页 · N/P 换章 · +/- 缩放 · Esc 返回
-        </NText>
-        <NButton size="tiny" quaternary @click.stop="go(1)" :disabled="page >= files.length">
-          <template #icon><n-icon :component="ChevronForwardOutline" /></template>
-        </NButton>
+      <!-- 正文 -->
+      <div class="stage" :class="fit" :style="{ '--zoom': zoom }" @click="onStageClick">
+        <div v-if="loading" class="hint">加载中…</div>
+        <div v-else-if="!files.length" class="hint">
+          {{ chapter ? '这一章还没有图片' : '找不到该章节' }}
+          <NButton size="tiny" quaternary style="margin-left: 8px" @click.stop="load">重试</NButton>
+        </div>
+        <template v-else>
+          <img
+            v-for="v in visible"
+            :key="v.index"
+            :src="src(v.file) ?? ''"
+            :class="{ 'is-current': v.index === page }"
+            :style="
+              v.index === page
+                ? undefined
+                : { position: 'absolute', opacity: 0, pointerEvents: 'none' }
+            "
+            alt=""
+            draggable="false"
+          />
+        </template>
+      </div>
+
+      <!-- 底部页码条 -->
+      <div class="foot" :class="{ hidden: !showBar }" @click.stop>
+        <input
+          class="slider"
+          type="range"
+          aria-label="阅读页码"
+          min="1"
+          :max="Math.max(1, files.length)"
+          :value="page"
+          @input="goto(Number(($event.target as HTMLInputElement).value))"
+        />
+        <div class="foot-row">
+          <NButton size="tiny" quaternary @click.stop="go(-1)" :disabled="page <= 1">
+            <template #icon><n-icon :component="ChevronBackOutline" /></template>
+          </NButton>
+          <NText depth="3" style="font-size: 11px">
+            ← → 翻页 · 空格 下一页 · N/P 换章 · +/- 缩放 · Esc 返回
+          </NText>
+          <NButton size="tiny" quaternary @click.stop="go(1)" :disabled="page >= files.length">
+            <template #icon><n-icon :component="ChevronForwardOutline" /></template>
+          </NButton>
+        </div>
       </div>
     </div>
-  </div>
+  </NConfigProvider>
 </template>
 
 <style scoped>
 .reader {
+  color-scheme: dark;
+  --c-border: #343848;
+  --c-text-3: #a4abc2;
   position: fixed;
   inset: 0;
   background: var(--c-sunken);
@@ -385,6 +452,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--c-border);
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .foot {
   bottom: 0;
@@ -409,11 +478,13 @@ onBeforeUnmount(() => {
 .stage.width {
   overflow-x: hidden;
   overflow-y: auto;
+  align-items: flex-start;
 }
 .stage.width img {
   max-width: 100%;
   width: auto;
   height: auto;
+  transform-origin: top center;
 }
 
 /* 适应高度：一屏刚好一页，不滚动 */
@@ -430,6 +501,7 @@ onBeforeUnmount(() => {
 /* 原始大小：两个方向都可滚 */
 .stage.actual {
   overflow: auto;
+  align-items: flex-start;
 }
 .stage.actual img {
   max-width: none;

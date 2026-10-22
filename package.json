@@ -1,6 +1,6 @@
 {
   "name": "copycopy",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "漫画下载与管理桌面工具",
   "main": "./out/main/index.js",
   "author": "CopyCopy",
@@ -15,13 +15,17 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
-    "test": "node scripts/run-security.mjs && node scripts/run-e2e.mjs && node scripts/run-protocol.mjs && node scripts/run-ad-policy.mjs",
+    "test": "node scripts/run-security.mjs && node scripts/run-e2e.mjs && node scripts/run-protocol.mjs && node scripts/run-ad-policy.mjs && node scripts/run-ui-state.mjs",
     "test:ai": "node scripts/run-ai-e2e.mjs",
     "test:ad-policy": "node scripts/run-ad-policy.mjs",
     "test:security": "node scripts/run-security.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:protocol": "node scripts/run-protocol.mjs",
-    "test:live": "npx esbuild scripts/live-test.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/live.cjs && electron .tmp/live.cjs"
+    "test:live": "npx esbuild scripts/live-test.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/live.cjs && electron .tmp/live.cjs",
+    "test:ui-state": "node scripts/run-ui-state.mjs",
+    "test:ui": "npm run build && node scripts/run-ui.mjs",
+    "format": "prettier --write src/renderer/src electron.vite.config.ts scripts/lib/cdp.mjs scripts/run-ui*.mjs scripts/ui-state-test.ts scripts/security-check.mts",
+    "format:check": "prettier --check src/renderer/src electron.vite.config.ts scripts/lib/cdp.mjs scripts/run-ui*.mjs scripts/ui-state-test.ts scripts/security-check.mts"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^1.1.1",
@@ -40,6 +44,7 @@
     "esbuild": "^0.21.5",
     "naive-ui": "^2.40.3",
     "pinia": "^2.3.0",
+    "prettier": "^3.9.10",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",
     "vue": "^3.5.13",

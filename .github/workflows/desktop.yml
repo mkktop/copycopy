@@ -1,0 +1,63 @@
+name: Desktop checks and Windows build
+
+on:
+  pull_request:
+  push:
+    branches: [master, improve/desktop-experience]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: Desktop / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Regression tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm test
+      - name: Regression tests (Windows)
+        if: runner.os == 'Windows'
+        run: npm test
+      - name: Actual Electron UI (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/run-ui.mjs
+      - name: Actual Electron UI (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/run-ui.mjs
+      - name: Package Windows installer and portable app
+        if: runner.os == 'Windows'
+        run: npx electron-builder --win --config electron-builder.yml --publish never
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: CopyCopy-Windows-${{ github.sha }}
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: UI-screenshots-${{ matrix.os }}
+          path: .tmp/ui-screenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 14
