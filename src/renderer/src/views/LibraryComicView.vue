@@ -119,6 +119,32 @@ async function onComicMenu(key: string): Promise<void> {
   }
 }
 
+const chapterTools = computed<DropdownOption[]>(() => [
+  {
+    label: `导出尚未生成的 PDF（${withoutPdf.value.length}）`,
+    key: 'pdf',
+    disabled: withoutPdf.value.length === 0
+  },
+  ...(aiReady.value
+    ? [
+        {
+          label: `检测广告（${uncheckedCount.value} 章待检测）`,
+          key: 'detect',
+          disabled: uncheckedCount.value === 0 || aiBusy.value
+        }
+      ]
+    : [])
+])
+function onChapterTool(key: string): void {
+  if (key === 'pdf') openPdfDialog(withoutPdf.value)
+  if (key === 'detect')
+    void detectUnchecked().catch((cause) => message.error('检测失败：' + String(cause)))
+}
+function toggleSelectMode(): void {
+  selectMode.value = !selectMode.value
+  if (!selectMode.value) clearSelect()
+}
+
 function openReader(ch: LibraryChapter): void {
   router.push(`/library/${encodeURIComponent(comicName.value)}/${encodeURIComponent(ch.name)}`)
 }
@@ -534,88 +560,64 @@ onMounted(() => {
 
     <NDivider v-if="comic && comic.chapters.length" />
 
-    <!-- 统一的章节工具条：多选 / 筛选 / 批量操作都在这一行 -->
-    <div v-if="comic" class="toolbar">
-      <NCheckbox v-model:checked="onlyIncomplete">
-        只看缺页
-        <template v-if="incomplete.length">（{{ incomplete.length }}）</template>
-      </NCheckbox>
-
-      <!-- AI 广告识别入口 -->
-      <NButton
-        v-if="aiReady"
-        size="small"
-        :loading="aiBusy && !aiProgress"
-        :disabled="uncheckedCount === 0 || aiBusy"
-        @click="detectUnchecked"
-      >
-        检测广告
-        <template v-if="uncheckedCount">（{{ uncheckedCount }} 章待检测）</template>
-      </NButton>
+    <div v-if="comic" class="toolbar chapter-toolbar">
+      <h2>
+        本地章节
+        <span>{{ comic.chapters.length }}</span>
+      </h2>
       <NTag v-if="aiReady && adTotal" size="tiny" type="info" :bordered="false">
-        已归档 {{ adTotal }} 页
+        已归档 {{ adTotal }} 页广告
       </NTag>
+      <div class="chapter-controls">
+        <NCheckbox v-model:checked="onlyIncomplete">
+          只看缺页
+          <template v-if="incomplete.length">（{{ incomplete.length }}）</template>
+        </NCheckbox>
+        <NDropdown trigger="click" :options="chapterTools" @select="onChapterTool">
+          <NButton size="small" quaternary>章节工具 ▾</NButton>
+        </NDropdown>
+        <NButton size="small" :type="selectMode ? 'primary' : 'default'" @click="toggleSelectMode">
+          {{ selectMode ? '退出多选' : '批量管理' }}
+        </NButton>
+      </div>
+    </div>
+    <div v-if="aiProgress" class="ai-notice surface">
+      <NText depth="3" style="font-size: 12px">
+        正在整理广告 {{ aiProgress.done }}/{{ aiProgress.total }} 章
+      </NText>
       <NProgress
-        v-if="aiProgress"
         type="line"
         :percentage="Math.round((aiProgress.done / aiProgress.total) * 100)"
-        :height="6"
+        :height="5"
         :show-indicator="false"
-        style="width: 140px"
+        style="flex: 1"
       />
-      <NText v-if="aiProgress" depth="3" style="font-size: 11px">
-        {{ aiProgress.done }}/{{ aiProgress.total }} · 并发 {{ aiConcurrency }}
-      </NText>
-
-      <NButton
-        size="small"
-        :type="selectMode ? 'primary' : 'default'"
-        @click="selectMode = !selectMode"
-      >
-        {{ selectMode ? '退出多选' : '多选' }}
-      </NButton>
-      <NButton v-if="selectMode" size="small" @click="selectAll">全选</NButton>
-      <NButton
-        v-if="selectMode"
-        size="small"
-        :disabled="!incomplete.length"
-        @click="selectIncomplete"
-      >
-        选中缺页
-      </NButton>
-      <NButton v-if="selectMode" size="small" quaternary @click="clearSelect">清除</NButton>
-
-      <template v-if="selectMode">
-        <NText depth="3" style="font-size: 12px">已选 {{ selected.size }} 章</NText>
-        <NButton
-          size="small"
-          :disabled="selected.size === 0"
-          @click="openPdfDialog(selectedChapters)"
-        >
-          批量导出 PDF
+      <NButton size="small" quaternary @click="router.push('/ai-queue')">查看进度 →</NButton>
+    </div>
+    <div v-if="selectMode" class="batch-toolbar surface">
+      <div>
+        <NButton size="small" quaternary @click="selectAll">全选</NButton>
+        <NButton size="small" quaternary :disabled="!incomplete.length" @click="selectIncomplete">
+          选中缺页
+        </NButton>
+        <NButton size="small" quaternary @click="clearSelect">清除</NButton>
+        <span class="muted">已选 {{ selected.size }} 章</span>
+      </div>
+      <div>
+        <NButton size="small" :disabled="!selected.size" @click="openPdfDialog(selectedChapters)">
+          导出所选 PDF
         </NButton>
         <NButton
           size="small"
           type="error"
           quaternary
           :loading="batchBusy"
-          :disabled="selected.size === 0"
+          :disabled="!selected.size"
           @click="batchDelete"
         >
-          批量删除
+          删除所选
         </NButton>
-      </template>
-
-      <NButton
-        v-else
-        size="small"
-        quaternary
-        :disabled="withoutPdf.length === 0"
-        @click="openPdfDialog(withoutPdf)"
-      >
-        批量导出缺失 PDF
-        <template v-if="withoutPdf.length">（{{ withoutPdf.length }}）</template>
-      </NButton>
+      </div>
     </div>
 
     <div v-if="comic" class="chapter-list">
@@ -752,6 +754,47 @@ onMounted(() => {
   min-width: 0;
 }
 
+.chapter-toolbar h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+.chapter-toolbar h2 span {
+  color: var(--c-text-3);
+  font-size: 11px;
+  margin-left: 8px;
+  font-weight: 400;
+}
+.chapter-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.batch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.batch-toolbar > div {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ai-notice {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+}
 .chapter-list {
   display: flex;
   flex-direction: column;

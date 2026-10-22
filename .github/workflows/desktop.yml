@@ -3,7 +3,7 @@ name: Desktop checks and Windows build
 on:
   pull_request:
   push:
-    branches: [master, improve/desktop-experience]
+    branches: [master]
   workflow_dispatch:
 
 permissions:

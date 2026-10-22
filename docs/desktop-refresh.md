@@ -21,6 +21,7 @@
 
 ![发现漫画](screenshots/discover.png)
 ![我的书架](screenshots/library.png)
+![书架中的章节与阅读入口](screenshots/library-chapters.png)
 ![分类设置](screenshots/settings.png)
 ![深色外观](screenshots/settings-dark.png)
 
@@ -29,6 +30,7 @@
 - 下载页面移除了按 Enter 直接取消任务的全局快捷键。
 - 返回发现页时保留上一次搜索结果和已输入的搜索词。
 - 书架记住上次打开的章节，支持继续阅读。
+- 章节工具集中提供 PDF 与广告整理；批量选择、导出和删除仅在管理模式显示。
 
 ## 修复的行为
 

@@ -152,6 +152,12 @@ function goto(n: number): void {
 /* ---------- 快捷键 ---------- */
 
 function onKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    hideBar()
+    void router.push('/library/' + encodeURIComponent(comicName.value))
+    return
+  }
   if (
     (e.target instanceof Element &&
       e.target.closest(
@@ -185,11 +191,6 @@ function onKey(e: KeyboardEvent): void {
     case 'End':
       e.preventDefault()
       goto(files.value.length)
-      break
-    case 'Escape':
-      e.preventDefault()
-      hideBar()
-      router.push('/library/' + encodeURIComponent(comicName.value))
       break
     case 'n':
     case 'N':
@@ -228,7 +229,11 @@ const BAR_LINGER_MS = 3000
 function pokeBar(): void {
   showBar.value = true
   if (barTimer) clearTimeout(barTimer)
-  barTimer = setTimeout(() => (showBar.value = false), BAR_LINGER_MS)
+  barTimer = setTimeout(() => {
+    const focus = document.activeElement
+    if (focus instanceof Element && focus.closest('.reader .bar, .reader .foot')) return
+    showBar.value = false
+  }, BAR_LINGER_MS)
 }
 
 function hideBar(): void {

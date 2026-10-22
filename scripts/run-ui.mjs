@@ -198,6 +198,30 @@ try {
   await ui.waitFor(
     "document.querySelector('.head-info .page-title')?.textContent.includes('旅程 100%')"
   )
+  await ui.screenshot(path.join(shots, '05a-library-chapters.png'))
+  await ui.clickText('批量管理')
+  await ui.click('.chapter-list .chapter:first-child')
+  await expect(
+    "!!document.querySelector('.chapter.picked') && document.querySelector('.batch-toolbar').textContent.includes('已选 1 章')",
+    '章节批量工具仅在管理模式出现，选择数量同步'
+  )
+  await ui.clickText('退出多选')
+  await expect(
+    "!document.querySelector('.chapter.picked') && !document.querySelector('.batch-toolbar')",
+    '退出批量管理后清除选择，恢复阅读操作'
+  )
+  await ui.clickText('章节工具▾')
+  await ui.waitFor(
+    "Array.from(document.querySelectorAll('.n-dropdown-option-body')).some(item => item.textContent.includes('导出尚未生成的 PDF'))"
+  )
+  await ui.evaluate(
+    "Array.from(document.querySelectorAll('.n-dropdown-option-body')).find(item => item.textContent.includes('导出尚未生成的 PDF')).click()"
+  )
+  await ui.clickText('开始生成')
+  await ui.waitFor(
+    "window.mkk.libraryList().then(library => library.find(comic => comic.name === '旅程 100%')?.hasPdfCount === 2)"
+  )
+  console.log('PASS  章节工具可通过真实 IPC 批量生成 PDF')
   await ui.clickText('开始阅读')
   await ui.waitFor(
     "document.querySelector('.reader .title-text')?.textContent.includes('第1话') && !!document.querySelector('.stage img.is-current')"
@@ -215,7 +239,23 @@ try {
   await ui.clickText('继续阅读')
   await ui.waitFor("document.querySelector('.title-text')?.textContent.includes('第2话')")
   console.log('PASS  返回漫画后能继续上次阅读的章节')
-  await ui.clickText('返回')
+  await ui.evaluate("document.querySelector('.reader .bar button').focus()")
+  await ui.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27
+  })
+  await ui.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Escape',
+    code: 'Escape',
+    windowsVirtualKeyCode: 27
+  })
+  await ui.waitFor(
+    "document.querySelector('.head-info .page-title')?.textContent.includes('旅程 100%')"
+  )
+  console.log('PASS  工具条获得键盘焦点时，Esc 仍能返回章节目录')
 
   await ui.click('a[href="#/settings"]')
   await ui.waitFor("document.querySelector('.appearance-options')")
@@ -267,16 +307,16 @@ try {
     mobile: false
   })
   await ui.waitFor('innerWidth <= 900')
-  for (const route of [
-    '/settings',
-    '/library',
-    '/downloads',
-    '/subscriptions',
-    '/ai-queue',
-    '/search'
+  for (const [route, title] of [
+    ['/settings', '偏好设置'],
+    ['/library', '我的书架'],
+    ['/downloads', '下载管理'],
+    ['/subscriptions', '追更订阅'],
+    ['/ai-queue', '广告整理'],
+    ['/search', '发现漫画']
   ]) {
     await navigate(route)
-    await ui.waitFor("document.querySelector('.page')")
+    await ui.waitFor(`document.querySelector('main h1')?.textContent === ${JSON.stringify(title)}`)
     await expect(
       "Array.from(document.querySelectorAll('.page')).every(page => page.scrollWidth <= page.clientWidth + 1)",
       `900px 窗口无页面横向溢出：${route}`
