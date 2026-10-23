@@ -1,237 +1,276 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NCheckbox, NEmpty, NInput, NSelect, NSkeleton, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
+import { NButton, NIcon, NInput, NSelect, NSkeleton, useMessage } from 'naive-ui'
+import {
+  AddOutline,
+  FolderOpenOutline,
+  SearchOutline,
+  RefreshOutline,
+  ArrowDownOutline,
+  ArrowUpOutline
+} from '@vicons/ionicons5'
 import type { LibraryComic } from '@shared/types'
 import { useAppStore } from '../stores/app'
+import PageHeader from '../components/PageHeader.vue'
+import EmptyState from '../components/EmptyState.vue'
+import ComicCard from '../components/ComicCard.vue'
 
 const router = useRouter()
 const message = useMessage()
 const app = useAppStore()
-
 const comics = ref<LibraryComic[]>([])
 const loading = ref(false)
+const error = ref('')
 const filter = ref('')
-
-/** 排序：名称 / 章节数 / 页数 / 缺页数 */
-type SortKey = 'name' | 'chapters' | 'pages' | 'incomplete'
-const sortKey = ref<SortKey>('name')
+const sortKey = ref('name')
 const sortDesc = ref(false)
-/** 只看有缺页的 */
 const onlyIncomplete = ref(false)
-
+const retrying = ref(false)
+function clearFilters(): void {
+  filter.value = ''
+  onlyIncomplete.value = false
+}
 const sortOptions = [
-  { label: '按名称', value: 'name' },
-  { label: '按章节数', value: 'chapters' },
-  { label: '按页数', value: 'pages' },
-  { label: '按缺页数', value: 'incomplete' }
+  { label: '按名称排序', value: 'name' },
+  { label: '按章节数量', value: 'chapters' },
+  { label: '按图片数量', value: 'pages' }
 ]
-
-const filtered = computed(() => {
-  const kw = filter.value.trim().toLowerCase()
-  let list = comics.value
-  if (kw) {
-    list = list.filter(
-      (c) =>
-        c.name.toLowerCase().includes(kw) ||
-        c.chapters.some((ch) => ch.name.toLowerCase().includes(kw))
-    )
-  }
-  if (onlyIncomplete.value) {
-    list = list.filter((c) => (c.incompleteCount ?? 0) > 0)
-  }
-
-  const dir = sortDesc.value ? -1 : 1
-  const sorted = [...list]
-  sorted.sort((a, b) => {
-    switch (sortKey.value) {
-      case 'chapters':
-        return (a.chapters.length - b.chapters.length) * dir
-      case 'pages':
-        return (a.totalPages - b.totalPages) * dir
-      case 'incomplete':
-        return ((a.incompleteCount ?? 0) - (b.incompleteCount ?? 0)) * dir
-      default:
-        return a.name.localeCompare(b.name, 'zh') * dir
-    }
-  })
-  return sorted
-})
-
 const totals = computed(() => ({
-  comics: comics.value.length,
-  chapters: comics.value.reduce((s, c) => s + c.chapters.length, 0),
-  pages: comics.value.reduce((s, c) => s + c.totalPages, 0),
-  incomplete: comics.value.reduce((s, c) => s + (c.incompleteCount ?? 0), 0)
+  chapters: comics.value.reduce((sum, comic) => sum + comic.chapters.length, 0),
+  pages: comics.value.reduce((sum, comic) => sum + comic.totalPages, 0),
+  incomplete: comics.value.filter((comic) => (comic.incompleteCount || 0) > 0).length
 }))
-
+const filtered = computed(() => {
+  const keyword = filter.value.trim().toLowerCase()
+  return comics.value
+    .filter(
+      (comic) =>
+        (!onlyIncomplete.value || (comic.incompleteCount || 0) > 0) &&
+        (!keyword ||
+          comic.name.toLowerCase().includes(keyword) ||
+          comic.chapters.some((chapter) => chapter.name.toLowerCase().includes(keyword)))
+    )
+    .sort(
+      (a, b) =>
+        (sortKey.value === 'chapters'
+          ? a.chapters.length - b.chapters.length
+          : sortKey.value === 'pages'
+            ? a.totalPages - b.totalPages
+            : a.name.localeCompare(b.name, 'zh')) * (sortDesc.value ? -1 : 1)
+    )
+})
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     comics.value = await window.mkk.libraryList()
+  } catch (cause) {
+    error.value = String(cause)
   } finally {
     loading.value = false
   }
 }
-
-function open(c: LibraryComic): void {
-  router.push('/library/' + encodeURIComponent(c.name))
-}
-
 async function retryMissing(): Promise<void> {
-  const n = await window.mkk.retryMissing()
-  if (n > 0) message.success(`已把 ${n} 个缺页章节加入下载队列`)
-  else message.info('没有需要补下的章节')
+  retrying.value = true
+  try {
+    const count = await window.mkk.retryMissing()
+    if (count) message.success(`已将 ${count} 个缺页章节加入下载队列`)
+    else message.info('没有需要补下的章节')
+  } catch (cause) {
+    message.error('补全失败：' + String(cause))
+  } finally {
+    retrying.value = false
+  }
 }
-
+async function openFolder(): Promise<void> {
+  try {
+    if (!app.paths) await app.loadPaths()
+    if (app.paths) {
+      const result = await window.mkk.openPath(app.paths.out)
+      if (result) message.error(result)
+    }
+  } catch (cause) {
+    message.error('无法打开目录：' + String(cause))
+  }
+}
 onMounted(load)
 </script>
 
 <template>
   <div class="page">
-    <div class="toolbar">
-      <NInput
-        v-model:value="filter"
-        placeholder="按漫画名或章节名筛选"
-        style="width: 240px"
-        clearable
-      />
-      <NSelect
-        v-model:value="sortKey"
-        :options="sortOptions"
-        size="small"
-        style="width: 120px"
-      />
-      <NButton size="small" quaternary @click="sortDesc = !sortDesc">
-        {{ sortDesc ? '降序 ↓' : '升序 ↑' }}
-      </NButton>
-      <NCheckbox v-model:checked="onlyIncomplete">
-        只看缺页<span v-if="totals.incomplete">（{{ totals.incomplete }}）</span>
-      </NCheckbox>
-      <NButton size="small" :loading="loading" @click="load">刷新</NButton>
-      <NButton
-        v-if="totals.incomplete > 0"
-        size="small"
-        type="primary"
-        secondary
-        @click="retryMissing"
+    <div class="content-width">
+      <PageHeader
+        title="我的书架"
+        eyebrow="YOUR PERSONAL LIBRARY"
+        :description="
+          comics.length
+            ? `收藏了 ${comics.length} 部故事 · ${totals.chapters} 个章节 · ${totals.pages.toLocaleString()} 页离线内容`
+            : '每一个下载好的故事，都收在这里。'
+        "
       >
-        补下全部缺页
-      </NButton>
-      <NText depth="3" style="font-size: 12px">
-        共 {{ totals.comics }} 部 · {{ totals.chapters }} 章 · {{ totals.pages }} 页
-      </NText>
+        <NButton @click="openFolder">
+          <template #icon><NIcon :component="FolderOpenOutline" /></template>
+          下载目录
+        </NButton>
+        <NButton type="primary" @click="router.push('/search')">
+          <template #icon><NIcon :component="AddOutline" /></template>
+          添加漫画
+        </NButton>
+      </PageHeader>
+      <div class="library-toolbar">
+        <div class="filter-tabs" role="tablist" aria-label="书架筛选">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="!onlyIncomplete"
+            @click="onlyIncomplete = false"
+          >
+            全部漫画
+            <span>{{ comics.length }}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="onlyIncomplete"
+            @click="onlyIncomplete = true"
+          >
+            需要补全
+            <span>{{ totals.incomplete }}</span>
+          </button>
+        </div>
+        <div class="library-controls">
+          <NInput
+            v-model:value="filter"
+            placeholder="搜索书架…"
+            clearable
+            class="library-search"
+            aria-label="搜索本地书架"
+          >
+            <template #prefix><NIcon :component="SearchOutline" /></template>
+          </NInput>
+          <NSelect
+            v-model:value="sortKey"
+            :options="sortOptions"
+            class="library-sort"
+            aria-label="书架排序"
+          />
+          <NButton
+            quaternary
+            circle
+            :aria-label="sortDesc ? '改为升序' : '改为降序'"
+            @click="sortDesc = !sortDesc"
+          >
+            <template #icon>
+              <NIcon :component="sortDesc ? ArrowDownOutline : ArrowUpOutline" />
+            </template>
+          </NButton>
+          <NButton quaternary circle :loading="loading" aria-label="刷新书架" @click="load">
+            <template #icon><NIcon :component="RefreshOutline" /></template>
+          </NButton>
+        </div>
+      </div>
+      <div v-if="onlyIncomplete && totals.incomplete" class="repair-banner">
+        <span>有 {{ totals.incomplete }} 部漫画存在缺页，可以继续下载补齐。</span>
+        <NButton size="small" :loading="retrying" @click="retryMissing">一键补全缺页</NButton>
+      </div>
+      <div v-if="loading && !comics.length" class="book-grid" aria-busy="true">
+        <div v-for="index in 10" :key="index">
+          <NSkeleton height="auto" style="aspect-ratio: 3/4; border-radius: 10px" />
+          <NSkeleton text style="margin-top: 12px" />
+        </div>
+      </div>
+      <EmptyState v-else-if="error" title="书架暂时无法打开" :description="error">
+        <NButton @click="load">重新加载</NButton>
+      </EmptyState>
+      <div v-else-if="filtered.length" class="book-grid">
+        <ComicCard
+          v-for="comic in filtered"
+          :key="comic.name"
+          :name="comic.name"
+          :cover="app.imgUrl(comic.cover)"
+          :subtitle="`${comic.chapters.length} 章 · ${comic.totalPages.toLocaleString()} 页`"
+          :badge="comic.incompleteCount ? `${comic.incompleteCount} 章待补全` : undefined"
+          :warning="!!comic.incompleteCount"
+          @open="router.push('/library/' + encodeURIComponent(comic.name))"
+        />
+      </div>
+      <EmptyState
+        v-else-if="comics.length"
+        :title="onlyIncomplete && !filter ? '所有故事都完整了' : '没有符合条件的漫画'"
+        :description="
+          onlyIncomplete && !filter
+            ? '书架中的章节都已完整下载，安心开始阅读吧。'
+            : '试试其他关键词，或清除筛选条件。'
+        "
+      >
+        <NButton @click="clearFilters">查看全部漫画</NButton>
+      </EmptyState>
+      <EmptyState
+        v-else-if="!loading"
+        title="书架的第一本，会是什么？"
+        description="搜索一部喜欢的漫画，选择章节下载，就能在这里开始离线阅读。"
+      >
+        <NButton type="primary" @click="router.push('/search')">去发现漫画</NButton>
+      </EmptyState>
+      <div v-if="filtered.length" class="library-footer">
+        已显示 {{ filtered.length }} 部漫画
+        <span>内容保存在本机，离线也能阅读</span>
+      </div>
     </div>
-
-    <NSpin :show="loading">
-      <!-- 骨架屏：扫描 out/ 要一点时间，空白闪烁比骨架难看 -->
-      <div v-if="loading && !comics.length" class="grid">
-        <div v-for="i in 10" :key="i" class="card">
-          <NSkeleton height="0" style="padding-top: 133%" :sharp="false" />
-          <div class="sk-meta">
-            <NSkeleton text :repeat="2" />
-          </div>
-        </div>
-      </div>
-      <div v-else-if="filtered.length" class="grid">
-        <div v-for="c in filtered" :key="c.name" class="card" @click="open(c)">
-          <div class="cover-wrap">
-            <img
-              v-if="app.imgUrl(c.cover)"
-              :src="app.imgUrl(c.cover)!"
-              class="cover"
-              :alt="c.name"
-            />
-            <div v-else class="cover placeholder">{{ c.name.slice(0, 2) }}</div>
-            <span v-if="c.incompleteCount" class="badge">{{ c.incompleteCount }} 章缺页</span>
-          </div>
-          <div class="meta">
-            <div class="title" :title="c.name">{{ c.name }}</div>
-            <div class="tags">
-              <NTag size="tiny" :bordered="false">{{ c.chapters.length }} 章</NTag>
-              <NTag size="tiny" :bordered="false" type="info">{{ c.totalPages }} 页</NTag>
-            </div>
-          </div>
-        </div>
-      </div>
-      <NEmpty v-else-if="!loading" description="漫画库还是空的，先去下载一些章节" class="empty" />
-    </NSpin>
   </div>
 </template>
 
 <style scoped>
-.badge {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  padding: 2px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--c-warn-fg);
-  background: var(--c-warn-bg);
-  border-radius: 4px;
-}
-
-.sk-meta {
-  margin-top: 8px;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
-}
-
-.card {
-  cursor: pointer;
-  border-radius: 8px;
-  transition: transform 0.15s ease;
-}
-
-.card:hover {
-  transform: translateY(-3px);
-}
-
-.cover-wrap {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 3 / 4;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--c-placeholder);
-}
-
-.cover {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.placeholder {
+.library-toolbar {
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--c-text-4);
-  font-size: 26px;
-  font-weight: 600;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--c-border);
+  padding-bottom: 20px;
+  margin-bottom: 26px;
+  flex-wrap: wrap;
 }
-
-.meta {
-  margin-top: 8px;
-}
-
-.title {
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-bottom: 5px;
-}
-
-.tags {
+.library-controls {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  gap: 8px;
+}
+.library-search {
+  width: 180px;
+}
+.library-sort {
+  width: 132px;
+}
+.repair-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  margin-bottom: 24px;
+  border-radius: 10px;
+  background: var(--c-warn-bg);
+  color: var(--c-warn-fg);
+  font-size: 12px;
+}
+.library-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 32px;
+  padding-top: 18px;
+  border-top: 1px solid var(--c-border);
+  font-size: 10px;
+  color: var(--c-text-3);
+}
+@media (max-width: 1050px) {
+  .library-controls {
+    margin-left: auto;
+  }
+  .library-search {
+    width: 160px;
+  }
 }
 </style>

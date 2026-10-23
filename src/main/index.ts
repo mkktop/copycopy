@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import { registerIpc } from './ipc'
@@ -56,7 +56,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#101014',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#161820' : '#f6f7fa',
     title: 'CopyCopy',
     ...(icon ? { icon } : {}),
     webPreferences: {

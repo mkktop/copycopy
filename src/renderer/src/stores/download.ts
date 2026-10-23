@@ -16,19 +16,27 @@ export const useDownloadStore = defineStore('download', () => {
   const tasks = ref<DownloadTask[]>([])
   const currentPage = ref<Record<string, number>>({})
   const waiting = ref<number | undefined>()
-  const stats = ref({ pending: 0, running: 0, done: 0, failed: 0 })
+  const stats = computed(() => ({
+    pending: tasks.value.filter((task) => task.status === 'pending').length,
+    running: tasks.value.filter((task) => task.status === 'running').length,
+    done: tasks.value.filter((task) => task.status === 'done').length,
+    failed: tasks.value.filter((task) => task.status === 'failed').length
+  }))
 
   /** 每个任务的速度采样，用来算瞬时速度和剩余时间 */
   const samples = ref<Record<string, Sample[]>>({})
+  let revision = 0
+  let refreshSequence = 0
+  const updates = new Map<string, { revision: number; task: DownloadTask }>()
 
   function applyProgress(p: TaskProgress): void {
+    updates.set(p.task.id, { revision: ++revision, task: p.task })
     const i = tasks.value.findIndex((t) => t.id === p.task.id)
     if (i >= 0) tasks.value[i] = p.task
     else tasks.value.push(p.task)
 
     if (p.currentPage !== undefined) currentPage.value[p.task.id] = p.currentPage
     waiting.value = p.waitingSeconds
-    stats.value = p.queue
 
     if (p.task.status === 'running') record(p.task)
     else forget(p.task.id)
@@ -76,7 +84,19 @@ export const useDownloadStore = defineStore('download', () => {
   const runningTask = computed(() => tasks.value.find((t) => t.status === 'running') ?? null)
 
   async function refresh(): Promise<void> {
-    tasks.value = await window.mkk.queueList()
+    const request = ++refreshSequence
+    const since = revision
+    const snapshot = await window.mkk.queueList()
+    if (request !== refreshSequence) return
+    const merged = new Map(snapshot.map((task) => [task.id, task]))
+    for (const [id, update] of updates) {
+      if (update.revision > since) merged.set(id, update.task)
+      else if (!merged.has(id)) updates.delete(id)
+    }
+    tasks.value = [...merged.values()]
+    const ids = new Set(tasks.value.map((task) => task.id))
+    for (const id of Object.keys(samples.value)) if (!ids.has(id)) forget(id)
+    for (const id of Object.keys(currentPage.value)) if (!ids.has(id)) delete currentPage.value[id]
   }
 
   return {

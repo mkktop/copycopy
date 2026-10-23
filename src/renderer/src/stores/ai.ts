@@ -53,11 +53,13 @@ export const useAiStore = defineStore('ai', {
     pillDone: (s): number =>
       s.runs
         .filter((r) => r.finishedAt === null)
-        .reduce((a, r) => a + r.items.filter((i) => i.status !== 'pending' && i.status !== 'running').length, 0),
+        .reduce(
+          (a, r) =>
+            a + r.items.filter((i) => i.status !== 'pending' && i.status !== 'running').length,
+          0
+        ),
     pillTotal: (s): number =>
-      s.runs
-        .filter((r) => r.finishedAt === null)
-        .reduce((a, r) => a + r.items.length, 0)
+      s.runs.filter((r) => r.finishedAt === null).reduce((a, r) => a + r.items.length, 0)
   },
   actions: {
     runOf(comicName: string): AiRun | null {
@@ -127,7 +129,11 @@ export const useAiStore = defineStore('ai', {
       this.removeRun(comicName)
       this.runs.push({
         comicName,
-        items: chapters.map((c) => ({ chapterName: c, status: 'pending', moved: 0 })),
+        items: chapters.map((c) => ({
+          chapterName: c,
+          status: 'pending',
+          moved: 0
+        })),
         startedAt: Date.now(),
         finishedAt: null,
         canceled: false,
@@ -143,7 +149,7 @@ export const useAiStore = defineStore('ai', {
     /** 把失败/取消的章节重新排入并再跑一轮 */
     async retryFailed(comicName: string): Promise<void> {
       const r = this.runOf(comicName)
-      if (!r || r.finishedAt !== null) return
+      if (!r || r.finishedAt === null) return
       const again = r.items.filter((i) => i.status === 'failed' || i.status === 'canceled')
       if (again.length === 0) return
       for (const i of again) {

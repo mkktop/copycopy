@@ -22,6 +22,9 @@ import {
 import type { LibraryChapter, LibraryComic } from '@shared/types'
 import { useAppStore } from '../stores/app'
 import { useAiStore } from '../stores/ai'
+import ComicCover from '../components/ComicCover.vue'
+import { BookOutline } from '@vicons/ionicons5'
+import { NIcon } from 'naive-ui'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,6 +34,7 @@ const app = useAppStore()
 
 const comic = ref<LibraryComic | null>(null)
 const loading = ref(false)
+const lastReadChapter = ref('')
 const syncing = ref(false)
 
 const previewOpen = ref(false)
@@ -62,7 +66,7 @@ const selectedChapters = computed(() =>
   (comic.value?.chapters ?? []).filter((c) => selected.value.has(c.name))
 )
 
-const comicName = computed(() => decodeURIComponent(String(route.params.name ?? '')))
+const comicName = computed(() => String(route.params.name ?? ''))
 
 function toggleSelect(name: string): void {
   const next = new Set(selected.value)
@@ -115,10 +119,34 @@ async function onComicMenu(key: string): Promise<void> {
   }
 }
 
+const chapterTools = computed<DropdownOption[]>(() => [
+  {
+    label: `导出尚未生成的 PDF（${withoutPdf.value.length}）`,
+    key: 'pdf',
+    disabled: withoutPdf.value.length === 0
+  },
+  ...(aiReady.value
+    ? [
+        {
+          label: `检测广告（${uncheckedCount.value} 章待检测）`,
+          key: 'detect',
+          disabled: uncheckedCount.value === 0 || aiBusy.value
+        }
+      ]
+    : [])
+])
+function onChapterTool(key: string): void {
+  if (key === 'pdf') openPdfDialog(withoutPdf.value)
+  if (key === 'detect')
+    void detectUnchecked().catch((cause) => message.error('检测失败：' + String(cause)))
+}
+function toggleSelectMode(): void {
+  selectMode.value = !selectMode.value
+  if (!selectMode.value) clearSelect()
+}
+
 function openReader(ch: LibraryChapter): void {
-  router.push(
-    `/library/${encodeURIComponent(comicName.value)}/${encodeURIComponent(ch.name)}`
-  )
+  router.push(`/library/${encodeURIComponent(comicName.value)}/${encodeURIComponent(ch.name)}`)
 }
 
 /**
@@ -192,7 +220,10 @@ async function batchDelete(): Promise<void> {
       batchBusy.value = true
       try {
         const res = await window.mkk.deleteChapters(
-          targets.map((c) => ({ comicName: comicName.value, chapterName: c.name }))
+          targets.map((c) => ({
+            comicName: comicName.value,
+            chapterName: c.name
+          }))
         )
         if (res.failed > 0) {
           message.warning(`成功 ${res.ok} 个，失败 ${res.failed} 个`)
@@ -286,7 +317,10 @@ async function detectUnchecked(): Promise<void> {
   }
 
   const t0 = Date.now()
-  const run = await ai.runDetection(name, targets.map((c) => c.name))
+  const run = await ai.runDetection(
+    name,
+    targets.map((c) => c.name)
+  )
   await load()
   if (!run) return
 
@@ -301,9 +335,7 @@ async function detectUnchecked(): Promise<void> {
     )
   } else {
     message.success(
-      moved > 0
-        ? `已归档 ${moved} 页广告，耗时 ${secs}s`
-        : `检测完成，没有发现广告，耗时 ${secs}s`
+      moved > 0 ? `已归档 ${moved} 页广告，耗时 ${secs}s` : `检测完成，没有发现广告，耗时 ${secs}s`
     )
   }
 }
@@ -348,6 +380,13 @@ async function load(): Promise<void> {
   try {
     const list = await window.mkk.libraryList()
     comic.value = list.find((c) => c.name === comicName.value) ?? null
+    try {
+      lastReadChapter.value = localStorage.getItem('copycopy.lastChapter:' + comicName.value) || ''
+    } catch {
+      lastReadChapter.value = ''
+    }
+  } catch (cause) {
+    message.error('漫画加载失败：' + String(cause))
   } finally {
     loading.value = false
   }
@@ -463,13 +502,14 @@ onMounted(() => {
     <NSpin :show="loading">
       <div v-if="comic" class="head">
         <div class="head-cover">
-          <img v-if="app.imgUrl(comic.cover)" :src="app.imgUrl(comic.cover)!" alt="" />
-          <div v-else class="cover-placeholder">{{ comic.name.slice(0, 2) }}</div>
+          <ComicCover :src="app.imgUrl(comic.cover)" :name="comic.name" />
         </div>
 
         <div class="head-info">
           <NSpace align="center" :size="10">
-            <NButton size="tiny" quaternary @click="router.push('/library')">← 返回漫画库</NButton>
+            <NButton size="tiny" quaternary @click="router.push('/library')">
+              ← 返回我的书架
+            </NButton>
           </NSpace>
           <h2 class="page-title" style="margin: 6px 0 4px">{{ comic.name }}</h2>
           <NText depth="3" style="font-size: 12px">
@@ -482,104 +522,102 @@ onMounted(() => {
             之前上下两排工具功能重叠，用户得猜哪个管哪个。
           -->
           <NSpace style="margin-top: 12px">
+            <NButton
+              v-if="comic.chapters.length"
+              type="primary"
+              @click="
+                openReader(
+                  comic.chapters.find((chapter) => chapter.name === lastReadChapter) ||
+                    comic.chapters[0]
+                )
+              "
+            >
+              <template #icon><NIcon :component="BookOutline" /></template>
+              {{ lastReadChapter ? '继续阅读' : '开始阅读' }}
+            </NButton>
+            <NButton
+              v-if="comic.meta?.pathWord"
+              @click="router.push('/comic/' + encodeURIComponent(comic.meta.pathWord))"
+            >
+              查看站点章节
+            </NButton>
             <NButton size="small" @click="retryMissing" :disabled="incomplete.length === 0">
-              补下缺页<template v-if="incomplete.length">（{{ incomplete.length }}）</template>
+              补下缺页
+              <template v-if="incomplete.length">（{{ incomplete.length }}）</template>
             </NButton>
             <NDropdown :options="comicMenu" @select="onComicMenu">
-              <NButton size="small" quaternary>
-                更多 ▾
-              </NButton>
+              <NButton size="small" quaternary>更多 ▾</NButton>
             </NDropdown>
           </NSpace>
         </div>
       </div>
 
       <div v-else-if="!loading" class="empty">
-        没有找到《{{ comicName }}》，可能已被删除。<a @click="router.push('/library')">返回漫画库</a>
+        没有找到《{{ comicName }}》，可能已被删除。
+        <a @click="router.push('/library')">返回漫画库</a>
       </div>
     </NSpin>
 
     <NDivider v-if="comic && comic.chapters.length" />
 
-    <!-- 统一的章节工具条：多选 / 筛选 / 批量操作都在这一行 -->
-    <div v-if="comic" class="toolbar">
-      <NCheckbox v-model:checked="onlyIncomplete">
-        只看缺页<template v-if="incomplete.length">（{{ incomplete.length }}）</template>
-      </NCheckbox>
-
-      <!-- AI 广告识别入口 -->
-      <NButton
-        v-if="aiReady"
-        size="small"
-        :loading="aiBusy && !aiProgress"
-        :disabled="uncheckedCount === 0 || aiBusy"
-        @click="detectUnchecked"
-      >
-        检测广告<template v-if="uncheckedCount">（{{ uncheckedCount }} 章待检测）</template>
-      </NButton>
+    <div v-if="comic" class="toolbar chapter-toolbar">
+      <h2>
+        本地章节
+        <span>{{ comic.chapters.length }}</span>
+      </h2>
       <NTag v-if="aiReady && adTotal" size="tiny" type="info" :bordered="false">
-        已归档 {{ adTotal }} 页
+        已归档 {{ adTotal }} 页广告
       </NTag>
+      <div class="chapter-controls">
+        <NCheckbox v-model:checked="onlyIncomplete">
+          只看缺页
+          <template v-if="incomplete.length">（{{ incomplete.length }}）</template>
+        </NCheckbox>
+        <NDropdown trigger="click" :options="chapterTools" @select="onChapterTool">
+          <NButton size="small" quaternary>章节工具 ▾</NButton>
+        </NDropdown>
+        <NButton size="small" :type="selectMode ? 'primary' : 'default'" @click="toggleSelectMode">
+          {{ selectMode ? '退出多选' : '批量管理' }}
+        </NButton>
+      </div>
+    </div>
+    <div v-if="aiProgress" class="ai-notice surface">
+      <NText depth="3" style="font-size: 12px">
+        正在整理广告 {{ aiProgress.done }}/{{ aiProgress.total }} 章
+      </NText>
       <NProgress
-        v-if="aiProgress"
         type="line"
         :percentage="Math.round((aiProgress.done / aiProgress.total) * 100)"
-        :height="6"
+        :height="5"
         :show-indicator="false"
-        style="width: 140px"
+        style="flex: 1"
       />
-      <NText v-if="aiProgress" depth="3" style="font-size: 11px">
-        {{ aiProgress.done }}/{{ aiProgress.total }} · 并发 {{ aiConcurrency }}
-      </NText>
-
-      <NButton
-        size="small"
-        :type="selectMode ? 'primary' : 'default'"
-        @click="selectMode = !selectMode"
-      >
-        {{ selectMode ? '退出多选' : '多选' }}
-      </NButton>
-      <NButton v-if="selectMode" size="small" @click="selectAll">全选</NButton>
-      <NButton
-        v-if="selectMode"
-        size="small"
-        :disabled="!incomplete.length"
-        @click="selectIncomplete"
-      >
-        选中缺页
-      </NButton>
-      <NButton v-if="selectMode" size="small" quaternary @click="clearSelect">清除</NButton>
-
-      <template v-if="selectMode">
-        <NText depth="3" style="font-size: 12px">已选 {{ selected.size }} 章</NText>
-        <NButton
-          size="small"
-          :disabled="selected.size === 0"
-          @click="openPdfDialog(selectedChapters)"
-        >
-          批量导出 PDF
+      <NButton size="small" quaternary @click="router.push('/ai-queue')">查看进度 →</NButton>
+    </div>
+    <div v-if="selectMode" class="batch-toolbar surface">
+      <div>
+        <NButton size="small" quaternary @click="selectAll">全选</NButton>
+        <NButton size="small" quaternary :disabled="!incomplete.length" @click="selectIncomplete">
+          选中缺页
+        </NButton>
+        <NButton size="small" quaternary @click="clearSelect">清除</NButton>
+        <span class="muted">已选 {{ selected.size }} 章</span>
+      </div>
+      <div>
+        <NButton size="small" :disabled="!selected.size" @click="openPdfDialog(selectedChapters)">
+          导出所选 PDF
         </NButton>
         <NButton
           size="small"
           type="error"
           quaternary
           :loading="batchBusy"
-          :disabled="selected.size === 0"
+          :disabled="!selected.size"
           @click="batchDelete"
         >
-          批量删除
+          删除所选
         </NButton>
-      </template>
-
-      <NButton
-        v-else
-        size="small"
-        quaternary
-        :disabled="withoutPdf.length === 0"
-        @click="openPdfDialog(withoutPdf)"
-      >
-        批量导出缺失 PDF<template v-if="withoutPdf.length">（{{ withoutPdf.length }}）</template>
-      </NButton>
+      </div>
     </div>
 
     <div v-if="comic" class="chapter-list">
@@ -588,6 +626,10 @@ onMounted(() => {
         :key="ch.dir"
         class="chapter"
         :class="{ picked: selected.has(ch.name) }"
+        tabindex="0"
+        :aria-label="`${selectMode ? '选择' : '阅读'} ${ch.name}`"
+        @keydown.enter.self.prevent="selectMode ? toggleSelect(ch.name) : openReader(ch)"
+        @keydown.space.self.prevent="selectMode ? toggleSelect(ch.name) : openReader(ch)"
         @click="selectMode ? toggleSelect(ch.name) : openReader(ch)"
       >
         <NCheckbox
@@ -600,23 +642,19 @@ onMounted(() => {
         <span class="idx">第 {{ ch.index }} 章</span>
         <span class="name" :title="ch.name">{{ ch.name }}</span>
         <NTag v-if="ch.pdfPath" size="tiny" type="success" :bordered="false">PDF</NTag>
-        <NTag v-if="ch.complete === false" size="tiny" type="warning" :bordered="false">
-          缺页
-        </NTag>
+        <NTag v-if="ch.complete === false" size="tiny" type="warning" :bordered="false">缺页</NTag>
         <NTag v-if="ch.adCount" size="tiny" type="info" :bordered="false">
           广告 {{ ch.adCount }}
         </NTag>
         <NText depth="3" class="pages">
-          {{ ch.pageCount }}<template v-if="ch.expectedPages">/{{ ch.expectedPages }}</template> P
+          {{ ch.pageCount }}
+          <template v-if="ch.expectedPages">/{{ ch.expectedPages }}</template>
+          P
         </NText>
         <!-- 非多选态才显示行内操作；多选时整行就是开关 -->
         <NSpace v-if="!selectMode" :size="4" class="row-actions" @click.stop>
           <NButton size="tiny" type="primary" ghost @click="openReader(ch)">阅读</NButton>
-          <NDropdown
-            trigger="click"
-            :options="menuFor(ch)"
-            @select="(k: string) => onMenu(ch, k)"
-          >
+          <NDropdown trigger="click" :options="menuFor(ch)" @select="(k: string) => onMenu(ch, k)">
             <NButton size="tiny" quaternary class="more-btn">更多 ▾</NButton>
           </NDropdown>
         </NSpace>
@@ -645,7 +683,9 @@ onMounted(() => {
     >
       <NSpace vertical size="large">
         <NText depth="3" style="font-size: 13px">
-          将把 <b>{{ pdfTargets.length }}</b> 个章节分别合并为 PDF，输出到各自章节目录的同级位置。
+          将把
+          <b>{{ pdfTargets.length }}</b>
+          个章节分别合并为 PDF，输出到各自章节目录的同级位置。
         </NText>
         <NSpace vertical size="small">
           <NCheckbox v-model:checked="pdfUseGlobal">使用全局设置中的密码</NCheckbox>
@@ -675,11 +715,16 @@ onMounted(() => {
 .head {
   display: flex;
   gap: 20px;
+  padding: 26px;
+  border: 1px solid var(--c-border);
+  border-radius: 16px;
+  background: var(--c-surface);
+  align-items: center;
 }
 
 .head-cover {
-  width: 160px;
-  flex: 0 0 160px;
+  width: 136px;
+  flex: 0 0 136px;
   aspect-ratio: 3 / 4;
   border-radius: 8px;
   overflow: hidden;
@@ -709,19 +754,60 @@ onMounted(() => {
   min-width: 0;
 }
 
+.chapter-toolbar h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+.chapter-toolbar h2 span {
+  color: var(--c-text-3);
+  font-size: 11px;
+  margin-left: 8px;
+  font-weight: 400;
+}
+.chapter-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.batch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.batch-toolbar > div {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ai-notice {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+}
 .chapter-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
 .chapter {
-  display: grid;
-  grid-template-columns: 72px 1fr auto auto 150px;
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: 14px 16px;
+  border-radius: 9px;
+  border: 1px solid var(--c-border);
   background: var(--c-elevated);
   font-size: 13px;
   cursor: pointer;
@@ -760,9 +846,13 @@ onMounted(() => {
 .idx {
   color: var(--c-text-3);
   font-variant-numeric: tabular-nums;
+  width: 65px;
+  flex-shrink: 0;
 }
 
 .name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

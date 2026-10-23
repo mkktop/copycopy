@@ -13,6 +13,9 @@ import {
   useMessage
 } from 'naive-ui'
 import { useAiStore, type AiItemStatus, type AiQueueItem, type AiRun } from '../stores/ai'
+import PageHeader from '../components/PageHeader.vue'
+import EmptyState from '../components/EmptyState.vue'
+import { SparklesOutline } from '@vicons/ionicons5'
 
 /**
  * AI 广告检测队列页。
@@ -42,8 +45,15 @@ interface RunStats {
 
 function statsOf(run: AiRun): RunStats {
   const s: RunStats = {
-    done: 0, failed: 0, skipped: 0, canceled: 0, pending: 0, running: 0,
-    moved: 0, finished: 0, total: run.items.length
+    done: 0,
+    failed: 0,
+    skipped: 0,
+    canceled: 0,
+    pending: 0,
+    running: 0,
+    moved: 0,
+    finished: 0,
+    total: run.items.length
   }
   for (const i of run.items) {
     if (i.status === 'done') s.done++
@@ -60,14 +70,27 @@ function statsOf(run: AiRun): RunStats {
 
 const agg = computed<RunStats>(() => {
   const s: RunStats = {
-    done: 0, failed: 0, skipped: 0, canceled: 0, pending: 0, running: 0,
-    moved: 0, finished: 0, total: 0
+    done: 0,
+    failed: 0,
+    skipped: 0,
+    canceled: 0,
+    pending: 0,
+    running: 0,
+    moved: 0,
+    finished: 0,
+    total: 0
   }
   for (const r of ai.runs) {
     const t = statsOf(r)
-    s.done += t.done; s.failed += t.failed; s.skipped += t.skipped
-    s.canceled += t.canceled; s.pending += t.pending; s.running += t.running
-    s.moved += t.moved; s.finished += t.finished; s.total += t.total
+    s.done += t.done
+    s.failed += t.failed
+    s.skipped += t.skipped
+    s.canceled += t.canceled
+    s.pending += t.pending
+    s.running += t.running
+    s.moved += t.moved
+    s.finished += t.finished
+    s.total += t.total
   }
   return s
 })
@@ -116,7 +139,14 @@ async function cancelRun(run: AiRun): Promise<void> {
 }
 
 async function retryRun(run: AiRun): Promise<void> {
-  void ai.retryFailed(run.comicName).then(() => message.success(`《${run.comicName}》重试完成`))
+  try {
+    await ai.retryFailed(run.comicName)
+    const failed = ai.runOf(run.comicName)?.items.some((item) => item.status === 'failed')
+    if (failed) message.warning('部分章节仍未检测成功，可查看下方原因后重试')
+    else message.success(`《${run.comicName}》重试完成`)
+  } catch (cause) {
+    message.error('检测失败：' + String(cause))
+  }
 }
 
 function removeRun(run: AiRun): void {
@@ -130,18 +160,31 @@ function goLibrary(): void {
 
 <template>
   <div class="page">
+    <PageHeader
+      title="广告整理"
+      description="整理章节首尾的推广页面，让阅读更连贯。归档的图片随时可以恢复。"
+      eyebrow="A LITTLE LESS DISTRACTION"
+    >
+      <NButton @click="router.push('/settings?tab=ai')">配置 AI 服务</NButton>
+      <NButton type="primary" @click="goLibrary">从书架发起检测</NButton>
+    </PageHeader>
     <div class="toolbar">
       <NSpace align="center">
         <NTag type="info" :bordered="false">检测中 {{ agg.running }}</NTag>
         <NTag :bordered="false">等待 {{ agg.pending }}</NTag>
-        <NTag type="success" :bordered="false">无广告 {{ agg.done }}</NTag>
+        <NTag type="success" :bordered="false">检测完成 {{ agg.done }}</NTag>
         <NTag type="error" :bordered="false">失败 {{ agg.failed }}</NTag>
         <NTag type="warning" :bordered="false">已归档 {{ agg.moved }} 页</NTag>
       </NSpace>
 
       <NPopconfirm @positive-click="ai.clearFinished()">
         <template #trigger>
-          <NButton size="small" quaternary type="error" :disabled="!runs.some((r) => r.finishedAt !== null)">
+          <NButton
+            size="small"
+            quaternary
+            type="error"
+            :disabled="!runs.some((r) => r.finishedAt !== null)"
+          >
             清除已结束批次
           </NButton>
         </template>
@@ -153,15 +196,14 @@ function goLibrary(): void {
       </NText>
     </div>
 
-    <NEmpty
+    <EmptyState
       v-if="runs.length === 0"
-      description="暂无检测任务"
-      style="margin-top: 15vh"
+      title="给阅读留一份清净"
+      description="打开书架中的漫画，点击「检测广告」开始整理。每个章节的进度和结果会显示在这里。"
+      :icon="SparklesOutline"
     >
-      <template #extra>
-        <NButton size="small" @click="goLibrary">去漫画库</NButton>
-      </template>
-    </NEmpty>
+      <NButton type="primary" @click="goLibrary">选择要整理的漫画</NButton>
+    </EmptyState>
 
     <div v-else class="runs">
       <section v-for="run in runs" :key="run.comicName" class="run">
@@ -176,18 +218,14 @@ function goLibrary(): void {
             </NTag>
             <NTag v-else size="small" type="success" :bordered="false">已完成</NTag>
             <NText depth="3" class="meta">
-              {{ statsOf(run).finished }} / {{ statsOf(run).total }} 章
-              · 归档 {{ statsOf(run).moved }} 页
-              · {{ fmtElapsed((run.finishedAt ?? Date.now()) - run.startedAt) }}
+              {{ statsOf(run).finished }} / {{ statsOf(run).total }} 章 · 归档
+              {{ statsOf(run).moved }} 页 ·
+              {{ fmtElapsed((run.finishedAt ?? Date.now()) - run.startedAt) }}
             </NText>
           </div>
 
           <NSpace :size="6">
-            <NButton
-              v-if="run.finishedAt === null"
-              size="tiny"
-              @click="cancelRun(run)"
-            >
+            <NButton v-if="run.finishedAt === null" size="tiny" @click="cancelRun(run)">
               取消
             </NButton>
             <NButton
@@ -197,12 +235,7 @@ function goLibrary(): void {
             >
               重试失败
             </NButton>
-            <NButton
-              v-if="run.finishedAt !== null"
-              size="tiny"
-              quaternary
-              @click="removeRun(run)"
-            >
+            <NButton v-if="run.finishedAt !== null" size="tiny" quaternary @click="removeRun(run)">
               清除
             </NButton>
           </NSpace>
@@ -218,12 +251,19 @@ function goLibrary(): void {
         />
 
         <!-- 章节多的批次（80+ 章）内部滚动，别把页面拉成几千像素 -->
-        <NScrollbar class="items" :style="{ maxHeight: Math.min(400, 36 + run.items.length * 30) + 'px' }">
+        <NScrollbar
+          class="items"
+          :style="{
+            maxHeight: Math.min(400, 36 + run.items.length * 30) + 'px'
+          }"
+        >
           <div
             v-for="item in run.items"
             :key="item.chapterName"
             class="item"
-            :class="{ dim: run.finishedAt !== null && item.status === 'done' && item.moved === 0 }"
+            :class="{
+              dim: run.finishedAt !== null && item.status === 'done' && item.moved === 0
+            }"
           >
             <span class="chapter">{{ item.chapterName }}</span>
             <NText depth="3" class="detail">{{ itemDetail(item) }}</NText>

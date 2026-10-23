@@ -1,228 +1,342 @@
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, watch, type VNode } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   darkTheme,
   lightTheme,
+  zhCN,
+  dateZhCN,
   NConfigProvider,
   NMessageProvider,
   NDialogProvider,
   NNotificationProvider,
-  NLayout,
-  NLayoutHeader,
-  NLayoutContent,
-  NMenu,
   NButton,
+  NIcon,
   NDrawer,
   NDrawerContent,
-  NScrollbar,
-  NSpace,
   NTag,
-  NText,
+  NScrollbar,
   NEmpty,
-  NTooltip,
-  type MenuOption,
+  NDropdown,
+  NInput,
   type GlobalThemeOverrides
 } from 'naive-ui'
-import { useRoute, useRouter } from 'vue-router'
+import {
+  BookOutline,
+  CompassOutline,
+  LibraryOutline,
+  CloudDownloadOutline,
+  SparklesOutline,
+  BookmarkOutline,
+  SettingsOutline,
+  DocumentTextOutline,
+  SunnyOutline,
+  MoonOutline,
+  ChevronForwardOutline,
+  ArrowForwardOutline,
+  SearchOutline
+} from '@vicons/ionicons5'
 import { useAppStore } from './stores/app'
 import { useDownloadStore } from './stores/download'
 import { useAiStore } from './stores/ai'
+import { usePreferencesStore, type Appearance } from './stores/preferences'
 
 const router = useRouter()
 const route = useRoute()
 const app = useAppStore()
 const dl = useDownloadStore()
 const ai = useAiStore()
-
-/**
- * 跟随系统深浅色。
- * 之前写死暗色，Windows 开着浅色主题时整个窗口和任务栏格格不入。
- */
-const prefersDark = ref(
-  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia('(prefers-color-scheme: dark)').matches
-    : true
+const preferences = usePreferencesStore()
+const version = __APP_VERSION__
+const startupError = ref(false)
+const logFilter = ref('')
+const errorOnly = ref(false)
+const logLines = computed(() =>
+  app.logs.filter(
+    (line) =>
+      (!errorOnly.value || line.level !== 'INFO') &&
+      (!logFilter.value ||
+        `${line.time} ${line.level} ${line.message}`
+          .toLowerCase()
+          .includes(logFilter.value.toLowerCase()))
+  )
 )
-
-/**
- * naive-ui 的主题切换只管组件层；各视图的自定义配色走 styles.css 的
- * CSS 变量。必须两边一起切，否则就是组件浅色、页面深色的花屏。
- */
-function applyTheme(dark: boolean): void {
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-}
-watch(prefersDark, applyTheme, { immediate: true })
-
-let mql: MediaQueryList | null = null
-let onSchemeChange: ((e: MediaQueryListEvent) => void) | null = null
-if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-  mql = window.matchMedia('(prefers-color-scheme: dark)')
-  onSchemeChange = (e: MediaQueryListEvent) => {
-    prefersDark.value = e.matches
+const navGroups = [
+  {
+    label: '我的空间',
+    items: [
+      { path: '/search', label: '发现漫画', icon: CompassOutline },
+      { path: '/library', label: '我的书架', icon: LibraryOutline },
+      { path: '/subscriptions', label: '追更订阅', icon: BookmarkOutline }
+    ]
+  },
+  {
+    label: '任务与整理',
+    items: [
+      { path: '/downloads', label: '下载管理', icon: CloudDownloadOutline },
+      { path: '/ai-queue', label: '广告整理', icon: SparklesOutline }
+    ]
   }
-  mql.addEventListener?.('change', onSchemeChange)
-}
-
-/**
- * 浅色主题下 naive-ui 的配色覆盖。
- * 这些值必须和 styles.css 里的浅色 token 对齐，否则组件和页面
- * 的底色/文字色会差半档，看起来还是花的。
- */
-const LIGHT_OVERRIDES: GlobalThemeOverrides = {
-  common: {
-    primaryColor: '#12a37a',
-    primaryColorHover: '#0e8f6a',
-    primaryColorPressed: '#0b7a59',
-    primaryColorSuppl: '#12a37a',
-    bodyColor: '#f4f5f7',
-    cardColor: '#ffffff',
-    modalColor: '#ffffff',
-    popoverColor: '#ffffff',
-    tableColor: '#ffffff',
-    textColorBase: '#1f2329',
-    textColor1: '#1f2329',
-    textColor2: '#5b6169',
-    textColor3: '#868d96',
-    borderColor: '#e3e6ea',
-    dividerColor: '#e3e6ea',
-    hoverColor: '#f0f2f5',
-    actionColor: '#f0f2f5'
-  }
-}
-
-const themeOverrides = computed<GlobalThemeOverrides>(() =>
-  prefersDark.value ? {} : LIGHT_OVERRIDES
+]
+const activePath = computed(() =>
+  route.path.startsWith('/comic/')
+    ? '/search'
+    : route.path.startsWith('/library')
+      ? '/library'
+      : route.path
 )
-
-const activeKey = computed(() => {
-  if (route.path.startsWith('/comic')) return 'search'
-  if (route.path.startsWith('/library')) return 'library'
-  const k = route.path.replace('/', '')
-  return ['search', 'downloads', 'ai-queue', 'library', 'settings'].includes(k) ? k : 'search'
-})
-
+const isReader = computed(() => route.name === 'reader')
+const pageName = computed(() =>
+  route.path === '/settings'
+    ? '偏好设置'
+    : navGroups.flatMap((group) => group.items).find((item) => item.path === activePath.value)
+        ?.label || 'CopyCopy'
+)
 const runningCount = computed(() => dl.stats.running + dl.stats.pending)
-
-/** 日志抽屉宽度跟着窗口走，窄屏上别把 640px 的抽屉铺满 */
-const vw = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
-let onResize = (): void => {
-  vw.value = window.innerWidth
+const progress = computed(() => {
+  const task = dl.runningTask
+  return task?.total
+    ? Math.min(100, Math.round(((task.downloaded + task.skipped) / task.total) * 100))
+    : 0
+})
+const themeOptions = [
+  { label: '跟随系统', key: 'system' },
+  { label: '浅色模式', key: 'light' },
+  { label: '深色模式', key: 'dark' }
+]
+const themeOverrides = computed<GlobalThemeOverrides>(() => ({
+  common: {
+    primaryColor: preferences.dark ? '#aba0ff' : '#6558d9',
+    primaryColorHover: preferences.dark ? '#c0b8ff' : '#7a6de5',
+    primaryColorPressed: preferences.dark ? '#9486ed' : '#5144c5',
+    primaryColorSuppl: preferences.dark ? '#aba0ff' : '#6558d9',
+    bodyColor: preferences.dark ? '#161820' : '#f6f7fa',
+    cardColor: preferences.dark ? '#1c1f2a' : '#ffffff',
+    modalColor: preferences.dark ? '#1c1f2a' : '#ffffff',
+    popoverColor: preferences.dark ? '#242836' : '#ffffff',
+    textColor1: preferences.dark ? '#e7e9f4' : '#24283d',
+    textColor2: preferences.dark ? '#b0b6cc' : '#646b82',
+    textColor3: preferences.dark ? '#9099b2' : '#7d859b',
+    borderColor: preferences.dark ? '#2b3040' : '#e8eaf0',
+    dividerColor: preferences.dark ? '#2b3040' : '#e8eaf0',
+    borderRadius: '8px',
+    fontFamily: 'inherit',
+    fontSize: '13px'
+  },
+  Button: { heightMedium: '36px', fontWeight: '500' },
+  Input: { heightMedium: '36px' },
+  Card: {
+    borderRadius: '14px',
+    titleFontSizeSmall: '15px',
+    titleFontWeight: '600'
+  }
+}))
+const cleanups: Array<() => void> = []
+async function initialize(): Promise<void> {
+  const results = await Promise.allSettled([
+    app.loadConfig(),
+    app.loadPaths(),
+    dl.refresh(),
+    app.loadLogs()
+  ])
+  startupError.value = results.some((result) => result.status === 'rejected')
 }
-if (typeof window !== 'undefined') window.addEventListener('resize', onResize)
+function focusSearch(): void {
+  void router
+    .push('/search')
+    .then(() => document.querySelector<HTMLInputElement>('[data-search-input]')?.focus())
+}
+function onKey(event: KeyboardEvent): void {
+  if (isReader.value || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return
+  event.preventDefault()
+  focusSearch()
+}
+onMounted(() => {
+  cleanups.push(
+    window.mkk.onDownloadProgress(dl.applyProgress),
+    window.mkk.onLogLine(app.pushLog),
+    window.mkk.onQueueIdle(() => {
+      void app.loadConfig().catch(() => {
+        startupError.value = true
+      })
+    }),
+    window.mkk.onNavigate((path) => {
+      void router.push(path)
+    })
+  )
+  window.addEventListener('keydown', onKey)
+  void initialize()
+})
 onBeforeUnmount(() => {
-  if (typeof window !== 'undefined') window.removeEventListener('resize', onResize)
-  if (mql && onSchemeChange) mql.removeEventListener?.('change', onSchemeChange)
+  cleanups.forEach((cleanup) => cleanup())
+  window.removeEventListener('keydown', onKey)
 })
-const drawerWidth = computed(() => Math.min(720, Math.max(320, Math.floor(vw.value * 0.55))))
-
-/**
- * 菜单项自己带角标。
- * 之前把下载计数挂在「日志」按钮上——语义完全对不上，
- * 用户点进去看日志，莫名其妙多一个下载数字。
- * 这里只用普通 span 画药丸，不去和 NBadge 的定位较劲。
- */
-function countPill(n: number): VNode {
-  return h('span', { class: 'count-pill' }, n > 99 ? '99+' : String(n))
-}
-
-/**
- * AI 检测的进度药丸，挂在「检测队列」标签上。
- * 检测是后台跑的，有了它和检测队列页，任何页面都能知道检测的状态。
- */
-function aiPill(): VNode {
-  return h('span', { class: 'count-pill count-pill--ai' }, `AI ${ai.pillDone}/${ai.pillTotal}`)
-}
-
-const menuOptions = computed<MenuOption[]>(() => [
-  { label: '搜索', key: 'search' },
-  {
-    label: () =>
-      h('span', { class: 'menu-item' }, [
-        h('span', '下载队列'),
-        runningCount.value > 0 ? countPill(runningCount.value) : null
-      ]),
-    key: 'downloads'
-  },
-  {
-    label: () =>
-      h('span', { class: 'menu-item' }, [
-        h('span', '检测队列'),
-        ai.busy ? aiPill() : null
-      ]),
-    key: 'ai-queue'
-  },
-  { label: '漫画库', key: 'library' },
-  { label: '设置', key: 'settings' }
-])
-
-function go(key: string): void {
-  router.push('/' + key)
-}
-
-onMounted(async () => {
-  await Promise.all([app.loadConfig(), app.loadPaths(), dl.refresh(), app.loadLogs()])
-  window.mkk.onDownloadProgress(dl.applyProgress)
-  window.mkk.onLogLine(app.pushLog)
-  // 点系统通知时主进程会让窗口跳到下载队列页
-  window.mkk.onNavigate((p) => router.push(p))
-})
-
-onBeforeUnmount(() => mql?.removeEventListener?.('change', () => {}))
 </script>
 
 <template>
-  <NConfigProvider :theme="prefersDark ? darkTheme : lightTheme" :theme-overrides="themeOverrides">
+  <NConfigProvider
+    :theme="preferences.dark ? darkTheme : lightTheme"
+    :theme-overrides="themeOverrides"
+    :locale="zhCN"
+    :date-locale="dateZhCN"
+  >
     <NMessageProvider>
       <NDialogProvider>
         <NNotificationProvider>
-          <NLayout position="absolute" class="shell">
-            <NLayoutHeader bordered class="topbar">
-              <span class="brand">CopyCopy</span>
-              <NMenu
-                mode="horizontal"
-                :value="activeKey"
-                :options="menuOptions"
-                class="menu"
-                @update:value="go"
-              />
-              <NTooltip trigger="hover" placement="bottom">
-                <template #trigger>
-                  <NButton size="small" quaternary class="ghost-btn" @click="app.logOpen = true">
-                    日志
-                  </NButton>
-                </template>
-                打开运行日志
-              </NTooltip>
-            </NLayoutHeader>
-
-            <NLayoutContent content-style="height: 100%;">
-              <RouterView />
-            </NLayoutContent>
-          </NLayout>
-
-          <NDrawer v-model:show="app.logOpen" :width="drawerWidth" placement="right">
+          <div class="app-shell" :class="{ 'app-shell--reading': isReader }">
+            <aside v-if="!isReader" class="sidebar" aria-label="主导航">
+              <button class="brand" type="button" @click="router.push('/search')">
+                <span class="brand-mark"><NIcon :component="BookOutline" :size="23" /></span>
+                <span>
+                  <strong>
+                    CopyCopy
+                    <span class="brand-dot">.</span>
+                  </strong>
+                  <small>让好故事留在身边</small>
+                </span>
+              </button>
+              <nav class="nav-groups">
+                <div v-for="group in navGroups" :key="group.label" class="nav-group">
+                  <div class="nav-label">{{ group.label }}</div>
+                  <RouterLink
+                    v-for="item in group.items"
+                    :key="item.path"
+                    :to="item.path"
+                    class="nav-item"
+                    :class="{ selected: activePath === item.path }"
+                    :aria-current="activePath === item.path ? 'page' : undefined"
+                  >
+                    <NIcon :component="item.icon" :size="19" />
+                    <span class="nav-text">{{ item.label }}</span>
+                    <span v-if="item.path === '/downloads' && runningCount" class="nav-count">
+                      {{ runningCount }}
+                    </span>
+                    <span v-if="item.path === '/ai-queue' && ai.busy" class="nav-count">
+                      {{ ai.pillDone }}/{{ ai.pillTotal }}
+                    </span>
+                  </RouterLink>
+                </div>
+              </nav>
+              <button
+                v-if="runningCount"
+                class="sidebar-task"
+                type="button"
+                @click="router.push('/downloads')"
+              >
+                <span class="sidebar-task__heading">
+                  <span class="status-dot" />
+                  正在下载
+                  <NIcon :component="ArrowForwardOutline" />
+                </span>
+                <strong>{{ dl.runningTask?.comicName || `${runningCount} 个章节等待下载` }}</strong>
+                <small>{{ dl.runningTask?.chapterName || '队列会自动继续' }}</small>
+                <span class="mini-progress"><span :style="{ width: `${progress}%` }" /></span>
+                <small>
+                  {{ progress }}%
+                  <span>{{ runningCount }} 个进行中的任务</span>
+                </small>
+              </button>
+              <div v-else class="sidebar-note">
+                <NIcon :component="BookOutline" :size="19" />
+                <span>你的故事，随时离线阅读。</span>
+              </div>
+              <div class="sidebar-bottom">
+                <RouterLink
+                  to="/settings"
+                  class="nav-item"
+                  :class="{ selected: activePath === '/settings' }"
+                >
+                  <NIcon :component="SettingsOutline" :size="19" />
+                  <span class="nav-text">偏好设置</span>
+                </RouterLink>
+                <button type="button" class="nav-item" @click="app.logOpen = true">
+                  <NIcon :component="DocumentTextOutline" :size="19" />
+                  <span class="nav-text">运行日志</span>
+                </button>
+                <div class="sidebar-version">
+                  <span>CopyCopy</span>
+                  <span>v{{ version }}</span>
+                </div>
+              </div>
+            </aside>
+            <div class="workspace">
+              <header v-if="!isReader" class="workspace-bar">
+                <div class="breadcrumbs">
+                  <span>工作台</span>
+                  <NIcon :component="ChevronForwardOutline" :size="12" />
+                  <strong>{{ pageName }}</strong>
+                </div>
+                <div class="workspace-bar__right">
+                  <button class="quick-search" type="button" @click="focusSearch">
+                    <NIcon :component="SearchOutline" :size="15" />
+                    <span>搜索漫画</span>
+                    <kbd>Ctrl K</kbd>
+                  </button>
+                  <span class="bar-divider" />
+                  <NDropdown
+                    :options="themeOptions"
+                    :value="preferences.appearance"
+                    @select="(key: string) => (preferences.appearance = key as Appearance)"
+                  >
+                    <NButton quaternary circle aria-label="切换外观" title="切换外观">
+                      <template #icon>
+                        <NIcon :component="preferences.dark ? MoonOutline : SunnyOutline" />
+                      </template>
+                    </NButton>
+                  </NDropdown>
+                </div>
+              </header>
+              <div v-if="startupError" class="startup-error" role="alert">
+                部分数据未能加载，请重试。
+                <NButton size="tiny" quaternary @click="initialize">重新加载</NButton>
+              </div>
+              <main class="workspace-content">
+                <RouterView v-slot="{ Component }">
+                  <KeepAlive include="SearchView"><component :is="Component" /></KeepAlive>
+                </RouterView>
+              </main>
+            </div>
+          </div>
+          <NDrawer v-model:show="app.logOpen" width="min(760px, 88vw)" placement="right">
             <NDrawerContent title="运行日志" closable>
-              <NSpace align="center" style="padding: 0 4px 10px">
-                <NTag size="tiny" :bordered="false" type="success">INFO</NTag>
-                <NText depth="3" style="font-size: 12px">
-                  共 {{ app.logs.length }} 行（应用内保留最近 2000 行，磁盘上按天轮转）
-                </NText>
-              </NSpace>
-              <NScrollbar style="height: calc(100% - 34px)">
+              <div class="toolbar">
+                <NInput
+                  v-model:value="logFilter"
+                  placeholder="搜索日志内容"
+                  clearable
+                  style="flex: 1"
+                />
+                <NButton
+                  size="small"
+                  :type="errorOnly ? 'primary' : 'default'"
+                  @click="errorOnly = !errorOnly"
+                >
+                  只看警告与错误
+                </NButton>
+              </div>
+              <p class="muted" style="font-size: 12px">
+                显示 {{ logLines.length }} 行 · 保留最近 2000 行
+              </p>
+              <NScrollbar style="height: calc(100% - 92px)">
                 <div class="log-pane">
-                  <div v-for="(l, i) in app.logs" :key="i" class="log-line">
-                    <span class="log-time">{{ l.time }}</span>
+                  <div v-for="(line, index) in logLines" :key="index" class="log-line">
+                    <span class="log-time">{{ line.time }}</span>
                     <NTag
                       size="tiny"
                       :bordered="false"
-                      :type="l.level === 'ERROR' ? 'error' : l.level === 'WARN' ? 'warning' : 'success'"
-                      class="log-level"
+                      :type="
+                        line.level === 'ERROR'
+                          ? 'error'
+                          : line.level === 'WARN'
+                            ? 'warning'
+                            : 'default'
+                      "
                     >
-                      {{ l.level }}
+                      {{ line.level }}
                     </NTag>
-                    <span class="log-msg">{{ l.message }}</span>
+                    <span>{{ line.message }}</span>
                   </div>
-                  <NEmpty v-if="app.logs.length === 0" description="暂无日志" />
+                  <NEmpty v-if="!logLines.length" description="没有匹配的日志" />
                 </div>
               </NScrollbar>
             </NDrawerContent>
@@ -234,92 +348,317 @@ onBeforeUnmount(() => mql?.removeEventListener?.('change', () => {}))
 </template>
 
 <style scoped>
-.shell {
+.app-shell {
+  display: flex;
+  height: 100dvh;
   background: var(--c-app);
 }
-
-.topbar {
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 214px;
+  flex: 0 0 214px;
+  background: var(--c-sidebar);
+  border-right: 1px solid var(--c-border);
+  padding: 30px 16px 0;
+  overflow-y: auto;
+}
+.brand {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 0 18px;
-  height: 52px;
+  gap: 11px;
+  padding: 0 7px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
 }
-
-.brand {
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.5px;
+.brand-mark {
+  width: 38px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--c-accent);
+  color: var(--c-accent-fg);
+  display: grid;
+  place-items: center;
+  transform: rotate(-5deg);
+}
+.brand strong {
+  display: block;
+  font-size: 21px;
+  letter-spacing: -0.8px;
+  line-height: 1.4;
+}
+.brand-dot {
+  color: var(--c-accent);
+}
+.brand small {
+  display: block;
+  font-size: 9px;
+  color: var(--c-text-3);
+  letter-spacing: 1.2px;
+  margin-top: 3px;
+}
+.nav-groups {
+  margin-top: 40px;
+}
+.nav-group + .nav-group {
+  margin-top: 28px;
+}
+.nav-label {
+  color: var(--c-text-3);
+  font-size: 10px;
+  margin: 0 14px 12px;
+  letter-spacing: 1px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 4px 0;
+  border: 0;
+  background: transparent;
+  border-radius: 9px;
+  color: var(--c-text-2);
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+.nav-item:hover {
+  background: var(--c-elevated-hover);
+}
+.nav-item.selected {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.nav-text {
+  flex: 1;
+  text-align: left;
   white-space: nowrap;
-  user-select: none;
 }
-
-.menu {
+.nav-count {
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--c-surface);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+.sidebar-task {
+  margin: auto 2px 20px;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
+  border-radius: 12px;
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-task__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--c-accent);
+  margin-bottom: 12px;
+}
+.sidebar-task__heading .n-icon {
+  margin-left: auto;
+}
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--c-accent);
+}
+.sidebar-task > strong {
+  display: block;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-task > small {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--c-text-2);
+  margin-top: 5px;
+}
+.mini-progress {
+  display: block;
+  height: 4px;
+  margin: 12px 0 8px;
+  border-radius: 4px;
+  background: var(--c-accent-border);
+  overflow: hidden;
+}
+.mini-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--c-accent);
+  transition: width 0.2s;
+}
+.sidebar-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--c-text-3);
+  font-size: 10px;
+  margin: auto 0 22px;
+  padding-top: 20px;
+}
+.sidebar-bottom {
+  border-top: 1px solid var(--c-border);
+  padding-top: 12px;
+  flex-shrink: 0;
+}
+.sidebar-version {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--c-text-3);
+  padding: 18px 14px;
+  letter-spacing: 0.4px;
+}
+.workspace {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
-
-.ghost-btn {
-  position: relative;
-  white-space: nowrap;
-}
-
-/* 下载计数的药丸。用普通 span 而不是 NBadge：
-   NBadge 要靠子元素撑定位，塞 0 尺寸的占位再覆盖 position 并不稳。 */
-.count-pill {
-  display: inline-block;
-  min-width: 17px;
-  height: 17px;
-  line-height: 17px;
-  padding: 0 5px;
-  margin-left: 6px;
-  border-radius: 9px;
-  background: var(--c-pill);
-  color: var(--c-accent-on);
-  font-size: 11px;
-  font-weight: 600;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-/* AI 检测进度药丸：蓝色区别于下载计数的绿色，内容是 "AI 3/82" */
-.count-pill--ai {
-  background: var(--c-accent-2);
-  padding: 0 7px;
-}
-.menu-item {
-  display: inline-flex;
+.workspace-bar {
+  display: flex;
+  height: 65px;
+  flex: 0 0 65px;
   align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 36px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
 }
-
-.log-pane {
-  font-family: Consolas, 'Cascadia Mono', monospace;
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--c-text-3);
+}
+.breadcrumbs strong {
+  color: var(--c-text-2);
+  font-weight: 500;
+}
+.workspace-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.quick-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--c-text-3);
+}
+.quick-search kbd {
+  margin-left: 20px;
+  padding: 1px 5px;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  font-size: 9px;
+  font-family: inherit;
+}
+.bar-divider {
+  height: 18px;
+  border-left: 1px solid var(--c-border);
+}
+.workspace-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+.startup-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--c-warn-bg);
+  color: var(--c-warn-fg);
+  padding: 8px;
   font-size: 12px;
-  line-height: 1.7;
-  padding: 0 4px;
 }
-
+.log-pane {
+  font:
+    11px/1.8 Consolas,
+    monospace;
+}
 .log-line {
   display: flex;
-  gap: 6px;
+  gap: 9px;
   align-items: baseline;
-  padding: 1px 0;
-  border-bottom: 1px solid transparent;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--c-border);
 }
-.log-line:hover {
-  background: rgba(127, 127, 127, 0.08);
-  border-radius: 3px;
+.log-line > :last-child {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-
 .log-time {
   color: var(--c-text-3);
-  flex: 0 0 auto;
+  flex-shrink: 0;
 }
-.log-level {
-  flex: 0 0 auto;
+@media (max-width: 1050px) {
+  .sidebar {
+    width: 188px;
+    flex-basis: 188px;
+    padding: 24px 12px 0;
+  }
+  .brand strong {
+    font-size: 19px;
+  }
+  .brand small {
+    font-size: 8px;
+  }
+  .workspace-bar {
+    padding: 0 24px;
+  }
 }
-.log-msg {
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--c-text-1);
+@media (max-height: 760px) {
+  .sidebar {
+    padding-top: 20px;
+  }
+  .nav-groups {
+    margin-top: 24px;
+  }
+  .nav-group + .nav-group {
+    margin-top: 18px;
+  }
+  .nav-item {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .sidebar-note {
+    display: none;
+  }
+  .sidebar-task {
+    padding: 10px;
+    margin-top: 16px;
+    margin-bottom: 12px;
+  }
+  .sidebar-bottom {
+    margin-top: auto;
+  }
+  .sidebar-version {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
 }
 </style>

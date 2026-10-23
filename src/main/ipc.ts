@@ -266,7 +266,7 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.proxySet, (_e, url: string | null) => {
     if (url) process.env.MKK_PROXY = String(url)
     else delete process.env.MKK_PROXY
-    return setupProxy()
+    return setupProxy(url ? String(url) : null)
   })
 
   /* ---------- 日志与路径 ---------- */
