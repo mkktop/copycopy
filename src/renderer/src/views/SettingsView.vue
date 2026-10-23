@@ -16,6 +16,7 @@ import {
 } from 'naive-ui'
 import {
   ColorPaletteOutline,
+  ArrowUpCircleOutline,
   CloudDownloadOutline,
   SparklesOutline,
   FolderOpenOutline,
@@ -30,6 +31,7 @@ import { usePreferencesStore, type Appearance } from '../stores/preferences'
 import PageHeader from '../components/PageHeader.vue'
 import SettingRow from '../components/SettingRow.vue'
 import EmptyState from '../components/EmptyState.vue'
+import AppUpdatePanel from '../components/AppUpdatePanel.vue'
 
 const app = useAppStore()
 const preferences = usePreferencesStore()
@@ -49,6 +51,7 @@ const proxyUrl = ref('')
 const activeProxy = ref<string | null>(null)
 const proxyBusy = ref(false)
 const categories = [
+  { key: 'updates', title: '程序升级', icon: ArrowUpCircleOutline, description: '版本检查与安装' },
   {
     key: 'general',
     title: '通用与外观',
@@ -285,6 +288,22 @@ onMounted(load)
             </button>
           </nav>
           <div class="settings-panels">
+            <section v-if="activeTab === 'updates'" aria-label="程序升级">
+              <AppUpdatePanel />
+              <NCard title="升级偏好" size="small">
+                <SettingRow
+                  title="启动时检查程序更新"
+                  description="启动后检查正式版本，发现新版时在顶部提示。下载和安装都由你手动开始。"
+                >
+                  <NSwitch
+                    v-model:value="g.app_update_check_on_launch"
+                    :checked-value="1"
+                    :unchecked-value="0"
+                    data-update-auto
+                  />
+                </SettingRow>
+              </NCard>
+            </section>
             <section v-if="activeTab === 'general'" aria-label="通用与外观">
               <NCard title="外观" size="small">
                 <p class="card-description">选一个舒服的阅读工作台，修改立即生效。</p>

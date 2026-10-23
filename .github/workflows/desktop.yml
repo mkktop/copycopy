@@ -5,6 +5,7 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -49,14 +50,30 @@ jobs:
       - name: Actual Electron UI (Windows)
         if: runner.os == 'Windows'
         run: node scripts/run-ui.mjs
+      - name: Actual updater UI and integrity checks (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/run-update-ui.mjs
+      - name: Actual updater UI and integrity checks (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/run-update-ui.mjs
       - name: Package Windows installer and portable app
         if: runner.os == 'Windows'
         run: npx electron-builder --win --config electron-builder.yml --publish never
+      - name: Verify Windows update metadata
+        if: runner.os == 'Windows'
+        run: node scripts/verify-update-artifacts.mjs
+      - name: Verify installer migration and data preservation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-install.ps1
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: CopyCopy-Windows-${{ github.sha }}
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v4

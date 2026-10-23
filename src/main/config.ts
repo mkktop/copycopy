@@ -17,6 +17,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     concurrency: 5,
     chapter_delay_min: 5,
     chapter_delay_max: 10,
+    app_update_check_on_launch: 1,
     auto_check_on_launch: 0,
     auto_check_interval_hours: 0,
     notify_on_done: 1,
@@ -66,6 +67,7 @@ function normalize(raw: unknown): AppConfig {
       concurrency: clampInt(g.concurrency ?? DEFAULT_CONFIG.global.concurrency, 1, 16, 5),
       chapter_delay_min: clampInt(g.chapter_delay_min ?? 5, 0, 300, 5),
       chapter_delay_max: clampInt(g.chapter_delay_max ?? 10, 0, 300, 10),
+      app_update_check_on_launch: Number(g.app_update_check_on_launch ?? 1) ? 1 : 0,
       auto_check_on_launch: Number(g.auto_check_on_launch ?? 0) ? 1 : 0,
       auto_check_interval_hours: clampInt(
         g.auto_check_interval_hours ?? DEFAULT_CONFIG.global.auto_check_interval_hours,
@@ -78,13 +80,10 @@ function normalize(raw: unknown): AppConfig {
 
       // AI：默认全关。不填 Key、不主动发请求，避免用户不知情地产生费用
       ai_enabled: Number(g.ai_enabled ?? 0) ? 1 : 0,
-      ai_auto_detect:
-        Number(g.ai_enabled ?? 0) && Number(g.ai_auto_detect ?? 0) ? 1 : 0,
+      ai_auto_detect: Number(g.ai_enabled ?? 0) && Number(g.ai_auto_detect ?? 0) ? 1 : 0,
       ai_base_url: normalizeBaseUrl(g.ai_base_url),
       ai_api_key_enc: typeof g.ai_api_key_enc === 'string' ? g.ai_api_key_enc : null,
-      ai_model: AI_MODELS.includes(String(g.ai_model))
-        ? String(g.ai_model)
-        : 'MiniMax-M3',
+      ai_model: AI_MODELS.includes(String(g.ai_model)) ? String(g.ai_model) : 'MiniMax-M3',
       ai_head_pages: clampInt(g.ai_head_pages ?? 1, 0, 3, 1),
       ai_tail_pages: clampInt(g.ai_tail_pages ?? 1, 0, 3, 1),
       ai_max_ad_pages: clampInt(
@@ -163,7 +162,9 @@ export function saveConfig(config: AppConfig): void {
 }
 
 /** 只改 comics 数组，其它配置不动。用于每下载完一章就落盘，保证崩溃安全。 */
-export function updateComics(mutator: (comics: ComicSubscription[]) => ComicSubscription[]): AppConfig {
+export function updateComics(
+  mutator: (comics: ComicSubscription[]) => ComicSubscription[]
+): AppConfig {
   const config = loadConfig()
   config.comics = mutator(config.comics)
   saveConfig(config)

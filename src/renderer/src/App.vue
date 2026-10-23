@@ -36,6 +36,7 @@ import {
   ArrowForwardOutline,
   SearchOutline
 } from '@vicons/ionicons5'
+import { useUpdateStore } from './stores/update'
 import { useAppStore } from './stores/app'
 import { useDownloadStore } from './stores/download'
 import { useAiStore } from './stores/ai'
@@ -44,6 +45,7 @@ import { usePreferencesStore, type Appearance } from './stores/preferences'
 const router = useRouter()
 const route = useRoute()
 const app = useAppStore()
+const update = useUpdateStore()
 const dl = useDownloadStore()
 const ai = useAiStore()
 const preferences = usePreferencesStore()
@@ -137,7 +139,8 @@ async function initialize(): Promise<void> {
     app.loadConfig(),
     app.loadPaths(),
     dl.refresh(),
-    app.loadLogs()
+    app.loadLogs(),
+    update.refresh()
   ])
   startupError.value = results.some((result) => result.status === 'rejected')
 }
@@ -153,6 +156,7 @@ function onKey(event: KeyboardEvent): void {
 }
 onMounted(() => {
   cleanups.push(
+    window.mkk.onAppUpdate(update.applyState),
     window.mkk.onDownloadProgress(dl.applyProgress),
     window.mkk.onLogLine(app.pushLog),
     window.mkk.onQueueIdle(() => {
@@ -267,6 +271,16 @@ onBeforeUnmount(() => {
                   <strong>{{ pageName }}</strong>
                 </div>
                 <div class="workspace-bar__right">
+                  <NButton
+                    v-if="update.hasUpdate"
+                    size="small"
+                    secondary
+                    type="primary"
+                    data-update-badge
+                    @click="router.push('/settings?tab=updates')"
+                  >
+                    {{ update.state?.status === 'downloaded' ? '更新已就绪' : '发现新版本' }}
+                  </NButton>
                   <button class="quick-search" type="button" @click="focusSearch">
                     <NIcon :component="SearchOutline" :size="15" />
                     <span>搜索漫画</span>

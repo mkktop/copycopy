@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type MkkApi, type QueueIdleSummary } from '../shared/ipc'
+import type { AppUpdateState } from '../shared/app-update'
 import type { LogLine, TaskProgress } from '../shared/types'
 
 /**
@@ -42,13 +43,11 @@ const api: MkkApi = {
   aiDetectChapter: (comicName, chapterName, force) =>
     ipcRenderer.invoke(IPC.aiDetectChapter, comicName, chapterName, force),
   aiUncheckedCount: () => ipcRenderer.invoke(IPC.aiUncheckedCount),
-  aiUndo: (comicName, chapterName) =>
-    ipcRenderer.invoke(IPC.aiUndo, comicName, chapterName),
+  aiUndo: (comicName, chapterName) => ipcRenderer.invoke(IPC.aiUndo, comicName, chapterName),
   aiModels: () => ipcRenderer.invoke(IPC.aiModels),
 
   checkUpdates: () => ipcRenderer.invoke(IPC.trackCheck),
-  subscribe: (comic, downloadLimit) =>
-    ipcRenderer.invoke(IPC.trackSubscribe, comic, downloadLimit),
+  subscribe: (comic, downloadLimit) => ipcRenderer.invoke(IPC.trackSubscribe, comic, downloadLimit),
   unsubscribe: (comicPath) => ipcRenderer.invoke(IPC.trackUnsubscribe, comicPath),
 
   logHistory: (limit) => ipcRenderer.invoke(IPC.logHistory, limit),
@@ -56,6 +55,17 @@ const api: MkkApi = {
 
   proxyGet: () => ipcRenderer.invoke(IPC.proxyGet),
   proxySet: (url) => ipcRenderer.invoke(IPC.proxySet, url),
+
+  appUpdateState: () => ipcRenderer.invoke(IPC.appUpdateState),
+  appUpdateCheck: () => ipcRenderer.invoke(IPC.appUpdateCheck),
+  appUpdateDownload: () => ipcRenderer.invoke(IPC.appUpdateDownload),
+  appUpdateInstall: () => ipcRenderer.invoke(IPC.appUpdateInstall),
+  appUpdateOpenRelease: () => ipcRenderer.invoke(IPC.appUpdateOpenRelease),
+  onAppUpdate(cb: (state: AppUpdateState) => void) {
+    const handler = (_e: unknown, state: AppUpdateState) => cb(state)
+    ipcRenderer.on(IPC.eventAppUpdate, handler)
+    return () => ipcRenderer.removeListener(IPC.eventAppUpdate, handler)
+  },
 
   onDownloadProgress(cb: (p: TaskProgress) => void) {
     const handler = (_e: unknown, p: TaskProgress) => cb(p)
