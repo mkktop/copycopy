@@ -5,7 +5,8 @@ import fs from 'fs'
 /**
  * 数据根目录。
  * 开发态：项目根目录。
- * 打包态：exe 同级目录（便携版语义），这样 config/out/logs 都能随 exe 走。
+ * 便携版：exe 同级目录，config/out/logs 随 exe 走。
+ * 安装版：用户数据目录，与会被安装程序替换的程序文件分开。
  */
 let baseDir = ''
 
@@ -24,14 +25,17 @@ export function initBaseDir(): string {
     if (portableDir) {
       baseDir = portableDir
     } else {
-      // 安装版：Program Files 下不可写时退回用户目录
-      const exeDir = path.dirname(process.execPath)
-      try {
-        fs.accessSync(exeDir, fs.constants.W_OK)
-        baseDir = exeDir
-      } catch {
-        baseDir = path.join(app.getPath('appData'), 'CopyCopy')
-      }
+      const userRoot = path.join(app.getPath('appData'), 'CopyCopy')
+      const dataRoot = path.join(userRoot, 'data')
+      // Older protected installations already kept their data outside the app.
+      // Continue using that location instead of hiding an existing library.
+      const hasNewData =
+        fs.existsSync(path.join(dataRoot, 'config', 'comic.yaml')) ||
+        fs.existsSync(path.join(dataRoot, 'out'))
+      const hasLegacyData =
+        fs.existsSync(path.join(userRoot, 'config', 'comic.yaml')) ||
+        fs.existsSync(path.join(userRoot, 'out'))
+      baseDir = !hasNewData && hasLegacyData ? userRoot : dataRoot
     }
   } else {
     baseDir = path.resolve(process.cwd())

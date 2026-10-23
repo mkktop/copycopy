@@ -23,13 +23,10 @@ import { getCurrentProxy, setupProxy } from './proxy'
 import { reschedule } from './scheduler'
 import { decryptSecret, encryptSecret } from './secrets'
 import { testConnection } from './ai/client'
-import {
-  detectAdsForChapter,
-  listUncheckedChapters,
-  undoAdsForChapter
-} from './ai/ad-service'
+import { detectAdsForChapter, listUncheckedChapters, undoAdsForChapter } from './ai/ad-service'
 import { resolveInside } from './safe-path'
 import { checkUpdates, subscribe } from './track'
+import type { ApplicationUpdater } from './update/controller'
 
 /** 转发进度事件到所有窗口 */
 export function broadcast(channel: string, payload: unknown): void {
@@ -49,7 +46,14 @@ function toRequests(items: EnqueuePayload[]): EnqueueRequest[] {
   }))
 }
 
-export function registerIpc(): void {
+export function registerIpc(updater: ApplicationUpdater): void {
+  ipcMain.handle(IPC.appUpdateState, () => updater.state)
+  ipcMain.handle(IPC.appUpdateCheck, () => updater.check())
+  ipcMain.handle(IPC.appUpdateDownload, () => updater.download())
+  ipcMain.handle(IPC.appUpdateInstall, () => updater.install())
+  ipcMain.handle(IPC.appUpdateOpenRelease, () => updater.openRelease())
+  updater.on('state', (state) => broadcast(IPC.eventAppUpdate, state))
+
   /* ---------- 站点 API ---------- */
   ipcMain.handle(IPC.search, (_e, keyword: string, page?: number, qType?: string) =>
     api.searchComic(String(keyword ?? ''), clampPage(page), normalizeSearchType(qType))
@@ -82,7 +86,9 @@ export function registerIpc(): void {
     (_e, items: Array<{ comicName: string; chapterName: string }>) =>
       deleteChapters(Array.isArray(items) ? items : [])
   )
-  ipcMain.handle(IPC.librarySyncCover, (_e, comicName: string) => syncCover(String(comicName ?? '')))
+  ipcMain.handle(IPC.librarySyncCover, (_e, comicName: string) =>
+    syncCover(String(comicName ?? ''))
+  )
   ipcMain.handle(IPC.libraryDeleteComic, (_e, comicName: string) =>
     deleteComic(String(comicName ?? ''))
   )
@@ -105,11 +111,7 @@ export function registerIpc(): void {
   })
   ipcMain.handle(
     IPC.libraryExportPdf,
-    async (
-      _e,
-      dirs: string[],
-      opts: { password?: string | null; useGlobalPassword?: boolean }
-    ) => {
+    async (_e, dirs: string[], opts: { password?: string | null; useGlobalPassword?: boolean }) => {
       const cfg = loadConfig()
       const password = opts?.useGlobalPassword ? cfg.global.pdf_password : opts?.password
       let ok = 0
@@ -191,6 +193,7 @@ export function registerIpc(): void {
       concurrency: next.concurrency,
       chapter_delay_min: next.chapter_delay_min,
       chapter_delay_max: next.chapter_delay_max,
+      app_update_check_on_launch: Number(next.app_update_check_on_launch) ? 1 : 0,
       auto_check_on_launch: Number(next.auto_check_on_launch) ? 1 : 0,
       auto_check_interval_hours: next.auto_check_interval_hours,
       notify_on_done: Number(next.notify_on_done) ? 1 : 0,
@@ -240,8 +243,10 @@ export function registerIpc(): void {
       })
     }
   )
-  ipcMain.handle(IPC.aiDetectChapter, (_e, comicName: string, chapterName: string, force?: boolean) =>
-    detectAdsForChapter(String(comicName ?? ''), String(chapterName ?? ''), force === true)
+  ipcMain.handle(
+    IPC.aiDetectChapter,
+    (_e, comicName: string, chapterName: string, force?: boolean) =>
+      detectAdsForChapter(String(comicName ?? ''), String(chapterName ?? ''), force === true)
   )
   ipcMain.handle(IPC.aiUncheckedCount, async () => (await listUncheckedChapters()).length)
   ipcMain.handle(IPC.aiUndo, (_e, comicName: string, chapterName: string) =>
@@ -271,15 +276,12 @@ export function registerIpc(): void {
 
   /* ---------- 日志与路径 ---------- */
   ipcMain.handle(IPC.logHistory, (_e, limit?: number) => logger.history(clampLimit(limit)))
-  ipcMain.handle(
-    IPC.appPaths,
-    (): AppPaths => ({
-      base: getBaseDir(),
-      out: getOutDir(),
-      config: getConfigPath(),
-      logs: getLogDir()
-    })
-  )
+  ipcMain.handle(IPC.appPaths, (): AppPaths => ({
+    base: getBaseDir(),
+    out: getOutDir(),
+    config: getConfigPath(),
+    logs: getLogDir()
+  }))
 
   /* ---------- 事件转发 ---------- */
   queue.on('progress', (p) => broadcast(IPC.eventDownloadProgress, p))

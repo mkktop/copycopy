@@ -1,5 +1,6 @@
 /** IPC 通道名与 preload 暴露的类型契约 */
 
+import type { AppUpdateState } from './app-update'
 import type {
   ApiResult,
   AppConfig,
@@ -60,12 +61,18 @@ export const IPC = {
   proxyGet: 'proxy:get',
   proxySet: 'proxy:set',
   appPaths: 'app:paths',
+  appUpdateState: 'app-update:state',
+  appUpdateCheck: 'app-update:check',
+  appUpdateDownload: 'app-update:download',
+  appUpdateInstall: 'app-update:install',
+  appUpdateOpenRelease: 'app-update:open-release',
 
   /** 主进程 -> 渲染层 */
   eventDownloadProgress: 'download:progress',
   eventLogLine: 'log:line',
   eventQueueIdle: 'queue:idle',
-  eventNavigate: 'app:navigate'
+  eventNavigate: 'app:navigate',
+  eventAppUpdate: 'app-update:changed'
 } as const
 
 /**
@@ -188,10 +195,7 @@ export interface MkkApi {
   aiModels(): Promise<string[]>
 
   checkUpdates(): Promise<{ checked: number; queued: number }>
-  subscribe(
-    comic: { name: string; path: string },
-    downloadLimit?: number
-  ): Promise<AppConfig>
+  subscribe(comic: { name: string; path: string }, downloadLimit?: number): Promise<AppConfig>
   unsubscribe(comicPath: string): Promise<AppConfig>
 
   logHistory(limit?: number): Promise<LogLine[]>
@@ -199,6 +203,13 @@ export interface MkkApi {
 
   proxyGet(): Promise<string | null>
   proxySet(url: string | null): Promise<string | null>
+
+  appUpdateState(): Promise<AppUpdateState>
+  appUpdateCheck(): Promise<AppUpdateState>
+  appUpdateDownload(): Promise<AppUpdateState>
+  appUpdateInstall(): Promise<AppUpdateState>
+  appUpdateOpenRelease(): Promise<void>
+  onAppUpdate(cb: (state: AppUpdateState) => void): () => void
 
   onDownloadProgress(cb: (p: TaskProgress) => void): () => void
   onLogLine(cb: (l: LogLine) => void): () => void

@@ -9,12 +9,9 @@ import { setupProxy } from './proxy'
 import { startScheduler } from './scheduler'
 import { queue } from './download/queue'
 import { notifyQueueIdle } from './notify'
-import {
-  registerLibraryProtocol,
-  registerRemoteProtocol,
-  registerSchemes
-} from './media-protocol'
+import { registerLibraryProtocol, registerRemoteProtocol, registerSchemes } from './media-protocol'
 import { checkUpdates } from './track'
+import { createApplicationUpdater } from './update'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -110,7 +107,8 @@ app.whenReady().then(() => {
   registerRemoteProtocol()
   // fetch 不读系统代理，必须自己挂上
   setupProxy()
-  registerIpc()
+  const updater = createApplicationUpdater()
+  registerIpc(updater)
 
   // 队列跑完发系统通知
   queue.on('idle', (info) => notifyQueueIdle(info))
@@ -124,6 +122,12 @@ app.whenReady().then(() => {
     setTimeout(() => {
       void checkUpdates().catch((e) => logger.error('启动检查更新失败: ' + String(e)))
     }, 3000)
+  }
+  if (app.isPackaged && config.global.app_update_check_on_launch === 1) {
+    const timer = setTimeout(() => {
+      void updater.check()
+    }, 6000)
+    timer.unref()
   }
   startScheduler()
 

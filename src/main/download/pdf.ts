@@ -35,10 +35,7 @@ function yieldToLoop(): Promise<void> {
  *  2. 原版用 len(contents) 而非 len(words) 算页数，多批次章节会算错；
  *  3. 原版固定 US Letter 纸，竖长漫画会留出大片白边，这里按图片实际比例分页。
  */
-export async function makePdf(
-  chapterDir: string,
-  options: PdfOptions = {}
-): Promise<PdfResult> {
+async function generatePdf(chapterDir: string, options: PdfOptions = {}): Promise<PdfResult> {
   let files: string[]
   try {
     files = fs
@@ -120,6 +117,21 @@ export async function makePdf(
     const msg = e instanceof Error ? e.message : String(e)
     logger.error('生成 PDF 失败: ' + msg)
     return { ok: false, error: msg }
+  }
+}
+
+let activeExports = 0
+
+export function pdfActiveCount(): number {
+  return activeExports
+}
+
+export async function makePdf(chapterDir: string, options: PdfOptions = {}): Promise<PdfResult> {
+  activeExports++
+  try {
+    return await generatePdf(chapterDir, options)
+  } finally {
+    activeExports--
   }
 }
 

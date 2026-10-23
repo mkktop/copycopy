@@ -1,0 +1,53 @@
+name: Publish Windows release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a stable version on master
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node -e 'const p = require("./package.json"); if (!/^\d+\.\d+\.\d+$/.test(p.version) || process.env.RELEASE_TAG !== `v${p.version}`) process.exit(1)'
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+  checks:
+    needs: validate
+    uses: ./.github/workflows/desktop.yml
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: CopyCopy-Windows-${{ github.sha }}
+          path: release
+      - run: node scripts/verify-update-artifacts.mjs
+      - name: Publish installers and update metadata together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: >-
+          gh release create "$RELEASE_TAG" release/*.exe release/*.blockmap release/latest.yml
+          --repo "$GITHUB_REPOSITORY" --verify-tag --title "CopyCopy $RELEASE_TAG" --generate-notes

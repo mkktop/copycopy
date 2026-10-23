@@ -20,7 +20,8 @@ portable:
   artifactName: ${productName}-${version}-便携版.${ext}
 
 nsis:
-  artifactName: ${productName}-${version}-安装包.${ext}
+  include: build/installer.nsh
+  artifactName: ${productName}-Setup-${version}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
@@ -28,6 +29,12 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: CopyCopy
   deleteAppDataOnUninstall: false
+
+publish:
+  provider: github
+  owner: mkktop
+  repo: copycopy
+  releaseType: release
 
 win:
   target:

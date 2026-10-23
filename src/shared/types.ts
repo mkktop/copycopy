@@ -72,6 +72,7 @@ export interface AppConfig {
     chapter_delay_min: number
     chapter_delay_max: number
     /** 启动时自动检查追更 */
+    app_update_check_on_launch: number
     auto_check_on_launch: number
     /** 定时检查追更的间隔（小时），0 = 不定时 */
     auto_check_interval_hours: number

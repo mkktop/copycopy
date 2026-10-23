@@ -1,6 +1,6 @@
 {
   "name": "copycopy",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "漫画下载与管理桌面工具",
   "main": "./out/main/index.js",
   "author": "CopyCopy",
@@ -11,11 +11,11 @@
     "start": "electron-vite preview",
     "build": "electron-vite build",
     "postinstall": "electron-builder install-app-deps",
-    "build:win": "electron-vite build && electron-builder --win --config electron-builder.yml",
+    "build:win": "electron-vite build && electron-builder --win --config electron-builder.yml --publish never",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
-    "test": "node scripts/run-security.mjs && node scripts/run-e2e.mjs && node scripts/run-protocol.mjs && node scripts/run-ad-policy.mjs && node scripts/run-ui-state.mjs",
+    "test": "node scripts/run-security.mjs && node scripts/run-e2e.mjs && node scripts/run-protocol.mjs && node scripts/run-ad-policy.mjs && node scripts/run-ui-state.mjs && node scripts/run-update.mjs",
     "test:ai": "node scripts/run-ai-e2e.mjs",
     "test:ad-policy": "node scripts/run-ad-policy.mjs",
     "test:security": "node scripts/run-security.mjs",
@@ -24,18 +24,23 @@
     "test:live": "npx esbuild scripts/live-test.ts --bundle --platform=node --format=cjs --external:electron --outfile=.tmp/live.cjs && electron .tmp/live.cjs",
     "test:ui-state": "node scripts/run-ui-state.mjs",
     "test:ui": "npm run build && node scripts/run-ui.mjs",
-    "format": "prettier --write src/renderer/src electron.vite.config.ts scripts/lib/cdp.mjs scripts/run-ui*.mjs scripts/ui-state-test.ts scripts/security-check.mts",
-    "format:check": "prettier --check src/renderer/src electron.vite.config.ts scripts/lib/cdp.mjs scripts/run-ui*.mjs scripts/ui-state-test.ts scripts/security-check.mts"
+    "format": "prettier --write src/renderer/src electron.vite.config.ts scripts/lib/cdp.mjs scripts/run-ui*.mjs scripts/ui-state-test.ts scripts/security-check.mts src/main/update src/shared/app-update.ts scripts/*update*.mjs scripts/update-test.ts scripts/fixtures/update-factory.ts",
+    "format:check": "prettier --check src/renderer/src electron.vite.config.ts scripts/lib/cdp.mjs scripts/run-ui*.mjs scripts/ui-state-test.ts scripts/security-check.mts src/main/update src/shared/app-update.ts scripts/*update*.mjs scripts/update-test.ts scripts/fixtures/update-factory.ts",
+    "test:update": "node scripts/run-update.mjs",
+    "test:update-ui": "npm run build && node scripts/run-update-ui.mjs"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^1.1.1",
+    "electron-updater": "^6.8.9",
     "js-yaml": "^4.1.0",
     "pdf-lib-plus-encrypt": "^1.1.0",
+    "semver": "^7.8.5",
     "undici": "^7.30.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.20.4",
+    "@types/semver": "^7.8.0",
     "@vicons/ionicons5": "^0.13.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "electron": "^33.3.1",
