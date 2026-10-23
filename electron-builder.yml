@@ -21,7 +21,7 @@ portable:
 
 nsis:
   include: build/installer.nsh
-  artifactName: ${productName}-${version}-安装包.${ext}
+  artifactName: ${productName}-Setup-${version}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

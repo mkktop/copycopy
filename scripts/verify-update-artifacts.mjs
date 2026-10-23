@@ -11,7 +11,7 @@ assert.equal(metadata.version, version, '更新元数据版本必须与程序一
 assert.ok(Array.isArray(metadata.files) && metadata.files.length > 0, '更新元数据缺少文件')
 for (const file of metadata.files) {
   const name = decodeURIComponent(file.url)
-  assert.equal(name, `CopyCopy-${version}-安装包.exe`, '自动更新只能使用 NSIS 安装包')
+  assert.equal(name, `CopyCopy-Setup-${version}.exe`, '自动更新只能使用 NSIS 安装包')
   const bytes = fs.readFileSync(path.join(directory, name))
   assert.equal(file.size, bytes.length, '安装包大小与元数据不一致')
   assert.equal(
@@ -21,7 +21,7 @@ for (const file of metadata.files) {
   )
   assert.ok(fs.statSync(path.join(directory, `${name}.blockmap`)).size > 0)
 }
-assert.equal(decodeURIComponent(metadata.path), `CopyCopy-${version}-安装包.exe`)
+assert.equal(decodeURIComponent(metadata.path), `CopyCopy-Setup-${version}.exe`)
 assert.equal(metadata.sha512, metadata.files[0].sha512)
 const configPath = path.join(directory, 'win-unpacked/resources/app-update.yml')
 if (fs.existsSync(configPath)) {

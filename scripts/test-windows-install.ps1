@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-$installer = (Resolve-Path "release/CopyCopy-$version-安装包.exe").Path
+$installer = (Resolve-Path "release/CopyCopy-Setup-$version.exe").Path
 $target = Join-Path $env:RUNNER_TEMP 'CopyCopy-update-test'
 $dataRoot = Join-Path $env:APPDATA 'CopyCopy/data'
 if (Test-Path $dataRoot) { throw 'Installer test requires an isolated runner profile' }
