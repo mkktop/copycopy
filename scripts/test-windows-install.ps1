@@ -21,6 +21,17 @@ Set-Content -Encoding utf8 "$target/cache/cover.jpg" 'cover-fixture'
 $files = @('config/comic.yaml', 'out/迁移漫画/第1话/001.jpg', 'logs/test.log', 'cache/cover.jpg')
 $hashes = @{}
 foreach ($file in $files) { $hashes[$file] = (Get-FileHash "$target/$file" -Algorithm SHA256).Hash }
+# A conflict must stop before any directory has been copied or uninstalled.
+New-Item -ItemType Directory -Force "$dataRoot/out" | Out-Null
+Set-Content -Encoding utf8 "$dataRoot/out/existing.txt" 'existing-library'
+$conflict = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$target") -Wait -PassThru
+if ($conflict.ExitCode -eq 0) { throw 'Installer accepted conflicting data directories' }
+if (Test-Path "$dataRoot/config") { throw 'Conflict detection copied partial data' }
+foreach ($file in $files) {
+  if ((Get-FileHash "$target/$file" -Algorithm SHA256).Hash -ne $hashes[$file]) { throw "Conflict handling modified old data $file" }
+}
+if ((Get-Content "$dataRoot/out/existing.txt" -Raw).Trim() -ne 'existing-library') { throw 'Existing library was modified' }
+Remove-Item "$dataRoot/out" -Recurse -Force
 Install-CopyCopy
 foreach ($file in $files) {
   if ((Get-FileHash "$dataRoot/$file" -Algorithm SHA256).Hash -ne $hashes[$file]) { throw "Migration corrupted $file" }
@@ -29,4 +40,4 @@ Install-CopyCopy
 foreach ($file in $files) {
   if ((Get-FileHash "$dataRoot/$file" -Algorithm SHA256).Hash -ne $hashes[$file]) { throw "Reinstall modified user data $file" }
 }
-Write-Output 'PASS  Windows 安装、旧目录数据迁移、重复升级保留数据（逐文件 SHA256 校验）'
+Write-Output 'PASS  Windows 安装、冲突中止、旧目录数据迁移、重复升级保留数据（逐文件 SHA256 校验）'

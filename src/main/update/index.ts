@@ -66,7 +66,8 @@ export function createApplicationUpdater(
         await configureProxy(updater)
         const result = await updater.checkForUpdates()
         if (!result) throw new Error('Update metadata unavailable')
-        return releaseFromInfo(result.updateInfo)
+        // Respect the engine's OS requirements and staged rollout eligibility.
+        return result.isUpdateAvailable ? releaseFromInfo(result.updateInfo) : null
       }
       const response = await fetch(LATEST_API, {
         headers: {

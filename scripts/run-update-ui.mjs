@@ -167,6 +167,11 @@ try {
   await waitStatus('error')
   await ui.waitFor('document.querySelector("[data-app-update]").textContent.includes("检查失败")')
   failCheck = false
+  release.version = version
+  await ui.click('[data-update-check]')
+  await waitStatus('not-available')
+  await ui.waitFor('document.querySelector("[data-update-title]").textContent.includes("最新版本")')
+  release.version = releaseVersion
   await ui.click('[data-update-check]')
   await waitStatus('available')
   await ui.waitFor('!!document.querySelector("[data-update-download]")')
