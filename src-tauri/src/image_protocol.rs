@@ -45,8 +45,14 @@ mod tests {
     #[test]
     fn preserves_local_reader_identifiers_and_page_numbers() {
         let target = r#"{"comicId":"故事100%","chapterId":"第1话","page":2}"#;
-        let uri = format!("http://copyimg.localhost/{}", urlencoding::encode(&format!("local/{target}")));
-        assert_eq!(parse_image_uri(&uri).unwrap(), ("local".into(), target.into()));
+        let uri = format!(
+            "http://copyimg.localhost/{}",
+            urlencoding::encode(&format!("local/{target}"))
+        );
+        assert_eq!(
+            parse_image_uri(&uri).unwrap(),
+            ("local".into(), target.into())
+        );
     }
 
     #[test]

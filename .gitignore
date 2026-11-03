@@ -7,3 +7,6 @@ src-tauri/target/
 src-tauri/gen/
 *.log
 .DS_Store
+src-tauri/icons/*
+!src-tauri/icons/icon.png
+!src-tauri/icons/icon.ico

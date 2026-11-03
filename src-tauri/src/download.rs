@@ -424,7 +424,9 @@ impl DownloadManager {
     ) -> Result<bool, String> {
         for extension in ["jpg", "png", "webp", "gif", "bmp"] {
             if let Ok(bytes) = tokio::fs::read(path.with_extension(extension)).await {
-                if api::valid_image(&bytes) { return Ok(true); }
+                if api::valid_image(&bytes) {
+                    return Ok(true);
+                }
             }
         }
         for attempt in 0..3 {
@@ -475,9 +477,16 @@ mod tests {
             let mut bytes = Vec::new();
             let image = image::RgbImage::from_pixel(width, 180, image::Rgb([100, 120, 130]));
             if index == 1 {
-                image::codecs::jpeg::JpegEncoder::new(&mut bytes).encode_image(&image).unwrap();
+                image::codecs::jpeg::JpegEncoder::new(&mut bytes)
+                    .encode_image(&image)
+                    .unwrap();
             } else {
-                image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+                image
+                    .write_to(
+                        &mut std::io::Cursor::new(&mut bytes),
+                        image::ImageFormat::Png,
+                    )
+                    .unwrap();
             }
             Mock::given(method("GET"))
                 .and(path(format!("/{index}.jpg")))
@@ -544,7 +553,8 @@ mod tests {
         let client = manager.client.clone();
         let pdf = manager.pdf.clone();
         drop(manager);
-        let manager = DownloadManager::new(db.clone(), client, settings, pdf, Arc::new(|_| {})).unwrap();
+        let manager =
+            DownloadManager::new(db.clone(), client, settings, pdf, Arc::new(|_| {})).unwrap();
         assert_eq!(manager.snapshot().tasks[0].status, "pending");
         manager.start();
         wait(&manager).await;

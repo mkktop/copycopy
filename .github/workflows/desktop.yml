@@ -32,13 +32,11 @@ jobs:
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf fonts-noto-cjk
-      - run: npm install --package-lock-only --ignore-scripts
       - run: npm ci
       - name: Generate application icons
         run: npm run tauri -- icon public/brand.svg --output src-tauri/icons
-      - name: Format initial architecture rewrite
-        run: npm run format
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - run: npm run format:check
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: npm run build
       - name: Install Chromium
         if: runner.os == 'Linux'
@@ -46,7 +44,7 @@ jobs:
       - name: Install Chromium
         if: runner.os == 'Windows'
         run: npx playwright install chromium
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
       - run: npm test
       - name: Package Windows application
         if: runner.os == 'Windows'
@@ -61,9 +59,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/native-smoke.ps1
-      - name: Export generated sources for review
-        if: always() && runner.os == 'Linux'
-        run: node scripts/ci-report.mjs
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
