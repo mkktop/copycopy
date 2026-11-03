@@ -385,8 +385,12 @@ impl DownloadManager {
         }
         self.db.save_chapter(&root.to_string_lossy(), &chapter)?;
         if chapter.complete {
-            let done: BTreeSet<u64> = self.db.local_chapters(&root.to_string_lossy(), Some(&task.comic.id))?
-                .into_iter().filter(|c| c.complete).map(|c| c.index)
+            let done: BTreeSet<u64> = self
+                .db
+                .local_chapters(&root.to_string_lossy(), Some(&task.comic.id))?
+                .into_iter()
+                .filter(|c| c.complete)
+                .map(|c| c.index)
                 .collect();
             if let Some(mut sub) = self
                 .db
@@ -418,15 +422,22 @@ impl DownloadManager {
         path: &Path,
         token: &CancellationToken,
     ) -> Result<bool, String> {
-        if let Ok(bytes) = tokio::fs::read(path).await {
-            if api::valid_image(&bytes) {
-                return Ok(true);
+        for extension in ["jpg", "png", "webp", "gif", "bmp"] {
+            if let Ok(bytes) = tokio::fs::read(path.with_extension(extension)).await {
+                if api::valid_image(&bytes) { return Ok(true); }
             }
         }
         for attempt in 0..3 {
             let result = tokio::select! {_=token.cancelled()=>return Err("已取消".into()),result=self.client.image(url)=>result};
             if let Ok(bytes) = result {
-                let path = path.to_path_buf();
+                let extension = match image::guess_format(&bytes).ok() {
+                    Some(image::ImageFormat::Png) => "png",
+                    Some(image::ImageFormat::WebP) => "webp",
+                    Some(image::ImageFormat::Gif) => "gif",
+                    Some(image::ImageFormat::Bmp) => "bmp",
+                    _ => "jpg",
+                };
+                let path = path.with_extension(extension);
                 tokio::task::spawn_blocking(move || storage::atomic_write(&path, &bytes))
                     .await
                     .map_err(|e| e.to_string())??;
@@ -462,13 +473,12 @@ mod tests {
         Mock::given(method("GET")).and(path("/api/v3/comic/test/chapter2/ch1")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":200,"results":{"chapter":{"contents":[{"url":"/2.jpg"},{"url":"/1.jpg"}],"words":[1,0]},"comic":{"name":"test"}}}))).mount(&server).await;
         for (index, width) in [(1, 101), (2, 102)] {
             let mut bytes = Vec::new();
-            image::codecs::jpeg::JpegEncoder::new(&mut bytes)
-                .encode_image(&image::RgbImage::from_pixel(
-                    width,
-                    180,
-                    image::Rgb([100, 120, 130]),
-                ))
-                .unwrap();
+            let image = image::RgbImage::from_pixel(width, 180, image::Rgb([100, 120, 130]));
+            if index == 1 {
+                image::codecs::jpeg::JpegEncoder::new(&mut bytes).encode_image(&image).unwrap();
+            } else {
+                image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+            }
             Mock::given(method("GET"))
                 .and(path(format!("/{index}.jpg")))
                 .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
@@ -524,8 +534,19 @@ mod tests {
                 .len(),
             2
         );
+        assert_eq!(pages[1].extension().unwrap(), "png");
         std::fs::remove_file(&pages[1]).unwrap();
-        manager.enqueue(vec![item]).unwrap();
+        let mut interrupted = manager.snapshot().tasks[0].clone();
+        interrupted.status = "running".into();
+        interrupted.completed = 1;
+        db.save_queue(&[interrupted]).unwrap();
+        let settings = manager.settings.clone();
+        let client = manager.client.clone();
+        let pdf = manager.pdf.clone();
+        drop(manager);
+        let manager = DownloadManager::new(db.clone(), client, settings, pdf, Arc::new(|_| {})).unwrap();
+        assert_eq!(manager.snapshot().tasks[0].status, "pending");
+        manager.start();
         wait(&manager).await;
         let task = manager.snapshot().tasks.last().unwrap().clone();
         assert_eq!(task.skipped, 1);

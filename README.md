@@ -47,3 +47,11 @@ Linux 需要 WebKitGTK 4.1 开发包；Windows 运行环境使用 WebView2。CI 
 ## 正式发布
 
 版本号在 package.json、Cargo.toml 与 tauri.conf.json 中一致。合并到 master 并推送匹配的稳定版本标签后，工作流运行检查、生成安装包并发布到 GitHub Releases。普通分支和 PR 仅提供构建产物，不自动发布。
+
+## 界面预览
+
+预览使用界面测试的固定数据，便于对照布局和交互；下载引擎另有 Rust 本地模拟站点测试。
+
+![发现故事](docs/previews/home.png)
+
+![深色偏好设置](docs/previews/settings-dark.png)

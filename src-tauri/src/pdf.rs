@@ -110,7 +110,14 @@ fn generate(root: &Path, dir: &Path, password: Option<&str>) -> Result<PdfResult
     let catalog = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages_id});
     doc.trailer.set("Root", catalog);
     let mut title = vec![0xfe, 0xff];
-    for value in dir.file_name().unwrap_or_default().to_string_lossy().encode_utf16() { title.extend_from_slice(&value.to_be_bytes()); }
+    for value in dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .encode_utf16()
+    {
+        title.extend_from_slice(&value.to_be_bytes());
+    }
     let info=doc.add_object(dictionary!{"Producer"=>Object::string_literal("CopyCopy"),"Title"=>Object::String(title, lopdf::StringFormat::Hexadecimal)});
     doc.trailer.set("Info", info);
     doc.compress();
@@ -122,7 +129,7 @@ fn generate(root: &Path, dir: &Path, password: Option<&str>) -> Result<PdfResult
             Object::String(identifier, lopdf::StringFormat::Hexadecimal),
         ],
     );
-    if let Some(password) = password.filter(|p| !p.is_empty() && *p != "None") {
+    if let Some(password) = password.filter(|p| !p.is_empty()) {
         use lopdf::encryption::crypt_filters::{Aes128CryptFilter, CryptFilter};
         use lopdf::{EncryptionState, EncryptionVersion, Permissions};
         use sha2::{Digest, Sha256};

@@ -5,7 +5,6 @@ pub fn parse_image_uri(uri: &str) -> Result<(String, String), &'static str> {
         .strip_prefix("http://copyimg.localhost/")
         .or_else(|| uri.strip_prefix("https://copyimg.localhost/"))
         .or_else(|| uri.strip_prefix("copyimg://localhost/"))
-        .or_else(|| uri.strip_prefix("copyimg://"))
         .ok_or("bad scheme")?;
     let decoded = urlencoding::decode(rest).map_err(|_| "bad encoding")?;
     let (kind, target) = decoded.split_once('/').ok_or("bad request")?;
@@ -44,15 +43,10 @@ mod tests {
     }
 
     #[test]
-    fn preserves_legacy_urls_and_unix_absolute_paths() {
-        let target = "/Volumes/Books/漫画/封面%20一.png";
-        for base in ["http://copyimg.localhost/", "copyimg://"] {
-            let uri = format!("{base}local/{}", urlencoding::encode(target));
-            assert_eq!(
-                parse_image_uri(&uri).unwrap(),
-                ("local".to_string(), target.to_string())
-            );
-        }
+    fn preserves_local_reader_identifiers_and_page_numbers() {
+        let target = r#"{"comicId":"故事100%","chapterId":"第1话","page":2}"#;
+        let uri = format!("http://copyimg.localhost/{}", urlencoding::encode(&format!("local/{target}")));
+        assert_eq!(parse_image_uri(&uri).unwrap(), ("local".into(), target.into()));
     }
 
     #[test]

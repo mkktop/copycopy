@@ -1270,4 +1270,7 @@ progress::-webkit-progress-value {
   }
 }
 
-.global-search kbd { white-space: nowrap; flex-shrink: 0; }
+.global-search kbd {
+  white-space: nowrap;
+  flex-shrink: 0;
+}

@@ -7,7 +7,11 @@ $process = Start-Process -FilePath 'src-tauri/target/release/copycopy.exe' -Pass
 try {
   $deadline = (Get-Date).AddSeconds(40)
   while (!(Test-Path $env:COPYCOPY_SMOKE_REPORT) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-  if (!(Test-Path $env:COPYCOPY_SMOKE_REPORT)) { throw 'Native WebView did not complete the smoke check' }
+  if (!(Test-Path $env:COPYCOPY_SMOKE_REPORT)) {
+    Get-Content (Join-Path $root 'stderr.txt') -ErrorAction SilentlyContinue | Write-Output
+    Write-Output ('Native process exited: ' + $process.HasExited)
+    throw 'Native WebView did not complete the smoke check'
+  }
   $report = Get-Content $env:COPYCOPY_SMOKE_REPORT -Raw | ConvertFrom-Json
   if (!$report.ok -or !$report.bridge) { throw ($report | ConvertTo-Json) }
   Write-Output ('PASS actual Tauri WebView2 window, frontend mount, Rust IPC, settings write and library/queue reads: ' + $report.version)

@@ -42,7 +42,10 @@ async function load(target = 1) {
 }
 function submit() {
   if (!query.value.trim()) return
-  if (query.value.trim() === committed.value && kind.value === committedKind.value) { void load(1); return }
+  if (query.value.trim() === committed.value && kind.value === committedKind.value) {
+    void load(1)
+    return
+  }
   void router.push({
     path: '/search',
     query: { q: query.value.trim(), ...(kind.value ? { kind: kind.value } : {}) }

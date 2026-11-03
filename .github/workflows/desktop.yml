@@ -56,7 +56,7 @@ jobs:
         run: node scripts/stage-installer.mjs
       - name: Build native IPC smoke target
         if: runner.os == 'Windows'
-        run: cargo build --release --features ui-smoke-test --manifest-path src-tauri/Cargo.toml
+        run: npm run tauri -- build --no-bundle --features ui-smoke-test
       - name: Verify actual WebView2 application
         if: runner.os == 'Windows'
         shell: pwsh
