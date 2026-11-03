@@ -28,9 +28,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          cache-on-failure: true
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf fonts-noto-cjk
       - run: npm install --package-lock-only --ignore-scripts
       - run: npm ci
       - name: Generate application icons
@@ -45,8 +46,8 @@ jobs:
       - name: Install Chromium
         if: runner.os == 'Windows'
         run: npx playwright install chromium
-      - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - run: npm test
       - name: Package Windows application
         if: runner.os == 'Windows'
         run: npm run tauri -- build --bundles nsis

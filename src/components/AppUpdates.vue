@@ -30,9 +30,9 @@ function megabytes(bytes: number) {
     </div>
     <div class="setting-row">
       <div>
-        <strong
-          >当前版本 {{ updates.currentVersion ? 'v' + updates.currentVersion : '读取中…' }}</strong
-        >
+        <strong>
+          当前版本 {{ updates.currentVersion ? 'v' + updates.currentVersion : '读取中…' }}
+        </strong>
         <p>检查与下载使用「网络连接」中的代理设置。</p>
       </div>
       <button class="btn btn-secondary btn-sm" :disabled="updates.busy" @click="updates.check">
@@ -65,9 +65,9 @@ function megabytes(bytes: number) {
         >
           <AppIcon name="download" :size="14" />
           {{ updates.phase === 'downloading' ? '下载中…' : '下载更新' }}
-          <span v-if="updates.result.download_size"
-            >({{ megabytes(updates.result.download_size) }})</span
-          >
+          <span v-if="updates.result.download_size">
+            ({{ megabytes(updates.result.download_size) }})
+          </span>
         </button>
         <button
           v-if="['ready', 'installing'].includes(updates.phase)"

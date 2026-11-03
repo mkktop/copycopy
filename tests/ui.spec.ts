@@ -4,13 +4,16 @@ import { installDesktop } from './desktop.fixture'
 
 const failures = new WeakMap<object, string[]>()
 test.beforeEach(async ({ page }) => {
-  const errors: string[] = []; failures.set(page, errors)
-  page.on('pageerror', error => errors.push(error.message))
+  const errors: string[] = []
+  failures.set(page, errors)
+  page.on('pageerror', (error) => errors.push(error.message))
   await installDesktop(page)
   await page.goto('/')
   await expect(page.locator('[data-app-ready]')).toBeVisible()
 })
-test.afterEach(async ({ page }) => { expect(failures.get(page)).toEqual([]) })
+test.afterEach(async ({ page }) => {
+  expect(failures.get(page)).toEqual([])
+})
 
 test('pika-style navigation, card layout and persistent appearance', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '发现故事', exact: true })).toBeVisible()
@@ -20,11 +23,13 @@ test('pika-style navigation, card layout and persistent appearance', async ({ pa
   await page.screenshot({ path: 'test-results/previews/home.png' })
   await page.getByRole('button', { name: '收起导航', exact: true }).click()
   await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
-  await page.reload(); await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
+  await page.reload()
+  await expect(page.locator('.sidebar')).toHaveClass(/collapsed/)
   await page.getByRole('button', { name: '展开导航', exact: true }).click()
   await page.getByRole('button', { name: '切换外观', exact: true }).click()
   await expect(page.locator('.app-container')).toHaveAttribute('data-theme', 'dark')
-  await page.reload(); await expect(page.locator('.app-container')).toHaveAttribute('data-theme', 'dark')
+  await page.reload()
+  await expect(page.locator('.app-container')).toHaveAttribute('data-theme', 'dark')
 })
 
 test('search keeps committed terms and results across detail navigation', async ({ page }) => {
@@ -43,7 +48,9 @@ test('search keeps committed terms and results across detail navigation', async 
   await expect(page.locator('.paginator .page-btn.active')).toHaveText('2')
 })
 
-test('chapter selection survives pagination and enqueue uses exact selected ids', async ({ page }) => {
+test('chapter selection survives pagination and enqueue uses exact selected ids', async ({
+  page
+}) => {
   await page.locator('.comic-card').first().click()
   await page.getByRole('checkbox', { name: '选择 第3话', exact: true }).check()
   await page.getByRole('button', { name: '下一页', exact: true }).click()
@@ -57,7 +64,9 @@ test('chapter selection survives pagination and enqueue uses exact selected ids'
   await expect(page.locator('.subscription-info h3')).toHaveText('雨后的书店')
   await page.getByRole('spinbutton', { name: '雨后的书店 单次追更章数' }).fill('3')
   await page.getByRole('button', { name: '保存偏好', exact: true }).click()
-  expect(await page.evaluate(() => (window as any).__copycopyTest.state.subscriptions[0].chapterLimit)).toBe(3)
+  expect(
+    await page.evaluate(() => (window as any).__copycopyTest.state.subscriptions[0].chapterLimit)
+  ).toBe(3)
   await page.getByRole('link', { name: /下载管理/ }).click()
   await expect(page.locator('[data-task-status="done"]')).toHaveCount(2)
   await expect(page.getByRole('button', { name: '开始阅读', exact: true }).first()).toBeVisible()
@@ -65,19 +74,29 @@ test('chapter selection survives pagination and enqueue uses exact selected ids'
   await expect(page.locator('.download-row')).toHaveCount(0)
 })
 
-test('library filtering, deliberate chapter management, PDF export and deletion', async ({ page }) => {
+test('library filtering, deliberate chapter management, PDF export and deletion', async ({
+  page
+}) => {
   await page.getByRole('link', { name: '本地书库', exact: true }).click()
   await page.getByRole('textbox', { name: '筛选书库' }).fill('不存在')
   await expect(page.getByRole('heading', { name: '没有符合筛选的漫画', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '清除筛选', exact: true }).click()
-  await page.locator('.library-tile .comic-card').first().click()
+  await page.getByRole('button', { name: '查看 雨后的书店', exact: true }).click()
   await expect(page.locator('[data-chapter-batch]')).toHaveCount(0)
   await page.getByRole('button', { name: '管理章节', exact: true }).click()
   await page.getByRole('checkbox', { name: '全选当前结果', exact: true }).check()
-  await page.locator('[data-chapter-batch]').getByRole('button', { name: '导出 PDF', exact: true }).click()
+  await page
+    .locator('[data-chapter-batch]')
+    .getByRole('button', { name: '导出 PDF', exact: true })
+    .click()
   await expect(page.getByRole('button', { name: '打开 PDF', exact: true })).toHaveCount(2)
-  expect(await page.evaluate(() => (window as any).__copycopyTest.state.exportCalls[0].chapterIds)).toEqual(['c1-ch1', 'c1-ch2'])
-  await page.locator('[data-chapter-batch]').getByRole('button', { name: '删除章节', exact: true }).click()
+  expect(
+    await page.evaluate(() => (window as any).__copycopyTest.state.exportCalls[0].chapterIds)
+  ).toEqual(['c1-ch1', 'c1-ch2'])
+  await page
+    .locator('[data-chapter-batch]')
+    .getByRole('button', { name: '删除章节', exact: true })
+    .click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click()
   await expect(page.locator('.local-chapter-row')).toHaveCount(2)
@@ -85,9 +104,11 @@ test('library filtering, deliberate chapter management, PDF export and deletion'
   await expect(page.locator('[data-chapter-batch]')).toHaveCount(0)
 })
 
-test('reader changes chapter, persists page and handles Esc from focused controls', async ({ page }) => {
+test('reader changes chapter, persists page and handles Esc from focused controls', async ({
+  page
+}) => {
   await page.getByRole('link', { name: '本地书库', exact: true }).click()
-  await page.locator('.library-tile .comic-card').first().click()
+  await page.getByRole('button', { name: '查看 雨后的书店', exact: true }).click()
   await page.getByRole('button', { name: '阅读 第1话', exact: true }).click()
   await expect(page.locator('.sidebar')).toHaveCount(0)
   await expect(page.locator('.reader-heading')).toContainText('第1话')
@@ -104,17 +125,23 @@ test('reader changes chapter, persists page and handles Esc from focused control
   await expect(page.getByRole('spinbutton', { name: '阅读页码' })).toHaveValue('2')
 })
 
-test('settings are drafts, leave guard works, saved values and dark preview persist', async ({ page }) => {
+test('settings are drafts, leave guard works, saved values and dark preview persist', async ({
+  page
+}) => {
   await page.getByRole('link', { name: '偏好设置', exact: true }).click()
   await page.getByRole('button', { name: '下载与追更', exact: true }).click()
   await page.getByRole('spinbutton', { name: '图片并发数' }).fill('7')
-  expect(await page.evaluate(() => (window as any).__copycopyTest.state.settings.parallelImages)).toBe(5)
+  expect(
+    await page.evaluate(() => (window as any).__copycopyTest.state.settings.parallelImages)
+  ).toBe(5)
   await expect(page.locator('.settings-savebar')).toContainText('有未保存的偏好')
   await page.getByRole('link', { name: '发现故事', exact: true }).click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click()
   await page.getByRole('button', { name: '保存偏好', exact: true }).click()
-  expect(await page.evaluate(() => (window as any).__copycopyTest.state.settings.parallelImages)).toBe(7)
+  expect(
+    await page.evaluate(() => (window as any).__copycopyTest.state.settings.parallelImages)
+  ).toBe(7)
   await page.getByRole('button', { name: '外观与体验', exact: true }).click()
   await page.getByRole('button', { name: /夜间小书房/ }).click()
   await page.getByRole('button', { name: '保存偏好', exact: true }).click()
@@ -126,7 +153,9 @@ test('settings are drafts, leave guard works, saved values and dark preview pers
   await expect(page.locator('.app-container')).toHaveAttribute('data-theme', 'dark')
 })
 
-test('software update notes remain text and download waits for explicit installation', async ({ page }) => {
+test('software update notes remain text and download waits for explicit installation', async ({
+  page
+}) => {
   await page.getByRole('link', { name: '偏好设置', exact: true }).click()
   await page.getByRole('button', { name: '软件更新', exact: true }).click()
   await page.evaluate(() => (window as any).__copycopyTest.setUpdateAvailable(true))
@@ -136,7 +165,9 @@ test('software update notes remain text and download waits for explicit installa
   await expect(page.locator('.update-notes img')).toHaveCount(0)
   await page.getByRole('button', { name: /下载更新/ }).click()
   await expect(page.getByRole('button', { name: '退出并安装', exact: true })).toBeVisible()
-  expect(await page.evaluate(() => (window as any).__copycopyTest.state.installRequested)).toBe(false)
+  expect(await page.evaluate(() => (window as any).__copycopyTest.state.installRequested)).toBe(
+    false
+  )
 })
 
 test('desktop layouts fit at the minimum window width', async ({ page }) => {
@@ -144,6 +175,13 @@ test('desktop layouts fit at the minimum window width', async ({ page }) => {
   for (const path of ['/library', '/downloads', '/subscriptions', '/settings', '/search']) {
     await page.goto('/#' + path)
     await expect(page.locator('[data-app-ready]')).toBeVisible()
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.querySelector('.workspace')!.scrollWidth <= document.querySelector('.workspace')!.clientWidth + 1)).toBe(true)
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth <= innerWidth &&
+          document.querySelector('.workspace')!.scrollWidth <=
+            document.querySelector('.workspace')!.clientWidth + 1
+      )
+    ).toBe(true)
   }
 })

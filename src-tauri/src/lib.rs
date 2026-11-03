@@ -12,15 +12,19 @@ mod storage;
 mod updates;
 
 use commands::*;
-use updates::*;
 use tauri::Manager;
-#[cfg(feature="ui-smoke-test")]
+use updates::*;
+#[cfg(feature = "ui-smoke-test")]
 #[tauri::command]
-fn smoke_done(app:tauri::AppHandle,report:serde_json::Value){
-    if let Some(path)=std::env::var_os("COPYCOPY_SMOKE_REPORT"){
-        let _=std::fs::write(path,serde_json::to_vec(&report).unwrap());
+fn smoke_done(app: tauri::AppHandle, report: serde_json::Value) {
+    if let Some(path) = std::env::var_os("COPYCOPY_SMOKE_REPORT") {
+        let _ = std::fs::write(path, serde_json::to_vec(&report).unwrap());
     }
-    app.exit(if report["ok"].as_bool()==Some(true){0}else{1});
+    app.exit(if report["ok"].as_bool() == Some(true) {
+        0
+    } else {
+        1
+    });
 }
 macro_rules! handlers { ($($extra:ident),*) => {
     tauri::generate_handler![app_snapshot,search_comics,get_comic,get_chapters,get_queue,enqueue_downloads,queue_action,
@@ -28,17 +32,26 @@ macro_rules! handlers { ($($extra:ident),*) => {
         get_subscriptions,set_subscription,remove_subscription,check_subscriptions,update_settings,pick_download_directory,
         open_location,open_chapter,clear_image_cache,get_app_version,check_for_updates,download_update,install_update,open_update_release $(,$extra)*]
 }; }
-pub fn run(){
-    let builder=tauri::Builder::default()
+pub fn run() {
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
+        .plugin(
+            tauri_plugin_log::Builder::default()
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .manage(UpdateManager::default())
-        .register_asynchronous_uri_scheme_protocol("copyimg",|context,request,responder|media::handle(context.app_handle().clone(),request,responder))
-        .setup(|app|{
-            let state=state::AppState::initialize(app.handle().clone()).map_err(std::io::Error::other)?;
-            app.manage(state.clone());state.start_background();Ok(())
+        .register_asynchronous_uri_scheme_protocol("copyimg", |context, request, responder| {
+            media::handle(context.app_handle().clone(), request, responder)
+        })
+        .setup(|app| {
+            let state =
+                state::AppState::initialize(app.handle().clone()).map_err(std::io::Error::other)?;
+            app.manage(state.clone());
+            state.start_background();
+            Ok(())
         });
     #[cfg(feature="ui-smoke-test")]
     let builder=builder.on_page_load(|webview,payload|{
@@ -56,9 +69,11 @@ pub fn run(){
             }catch(error){await invoke('smoke_done',{report:{ok:false,error:String(error)}})}
         })()"#);
     });
-    #[cfg(feature="ui-smoke-test")]
-    let builder=builder.invoke_handler(handlers!(smoke_done));
-    #[cfg(not(feature="ui-smoke-test"))]
-    let builder=builder.invoke_handler(handlers!());
-    builder.run(tauri::generate_context!()).expect("CopyCopy desktop runtime failed");
+    #[cfg(feature = "ui-smoke-test")]
+    let builder = builder.invoke_handler(handlers!(smoke_done));
+    #[cfg(not(feature = "ui-smoke-test"))]
+    let builder = builder.invoke_handler(handlers!());
+    builder
+        .run(tauri::generate_context!())
+        .expect("CopyCopy desktop runtime failed");
 }

@@ -1,9 +1,9 @@
 use crate::state::AppState;
-use std::sync::Arc;
 use reqwest::{Client, StatusCode};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 use tauri::{Manager, State, ipc::Channel};
 use tauri_plugin_opener::OpenerExt;
@@ -199,8 +199,11 @@ fn http_client(proxy: Option<&str>, timeout: Duration) -> Result<Client, String>
         .connect_timeout(Duration::from_secs(15))
         .timeout(timeout);
     if let Some(proxy) = proxy {
-        if proxy.trim().is_empty() { builder = builder.no_proxy(); }
-        else { builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| "代理地址无效")?); }
+        if proxy.trim().is_empty() {
+            builder = builder.no_proxy();
+        } else {
+            builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| "代理地址无效")?);
+        }
     }
     builder
         .build()

@@ -70,8 +70,9 @@ function submitJump() {
     >
       <AppIcon name="chevron-right" :size="14" />
     </button>
-    <span class="page-info"
-      >第<input
+    <span class="page-info">
+      第
+      <input
         v-model="draft"
         class="page-jump"
         inputmode="numeric"
@@ -81,8 +82,9 @@ function submitJump() {
         @focus="($event.target as HTMLInputElement).select()"
         @keyup.enter="($event.target as HTMLInputElement).blur()"
         @blur="submitJump"
-      />/ {{ pages }} 页</span
-    >
+      />
+      / {{ pages }} 页
+    </span>
   </div>
 </template>
 <style scoped>
