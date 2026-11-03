@@ -1,28 +1,20 @@
-name: Publish Windows release
-
+name: Publish CopyCopy desktop
 on:
   push:
     tags: ['v*']
-
 permissions:
   contents: read
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Require a stable version on master
+        with: { fetch-depth: 0 }
+      - name: Validate stable tag and source
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          node -e 'const p = require("./package.json"); if (!/^\d+\.\d+\.\d+$/.test(p.version) || process.env.RELEASE_TAG !== `v${p.version}`) process.exit(1)'
+          node -e 'const p = require("./package.json"); if (!/^\d+\.\d+\.\d+$/.test(p.version) || process.env.RELEASE_TAG !== "v" + p.version) process.exit(1)'
           git merge-base --is-ancestor "$GITHUB_SHA" origin/master
   checks:
     needs: validate
@@ -33,21 +25,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           name: CopyCopy-Windows-${{ github.sha }}
-          path: release
-      - run: node scripts/verify-update-artifacts.mjs
-      - name: Publish installers and update metadata together
+          path: installer
+      - name: Verify and publish
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: >-
-          gh release create "$RELEASE_TAG" release/*.exe release/*.blockmap release/latest.yml
-          --repo "$GITHUB_REPOSITORY" --verify-tag --title "CopyCopy $RELEASE_TAG" --generate-notes
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";import crypto from "node:crypto";const m=JSON.parse(fs.readFileSync("installer/manifest.json"));if(m.commit!==process.env.GITHUB_SHA||"v"+m.version!==process.env.RELEASE_TAG||crypto.createHash("sha256").update(fs.readFileSync("installer/"+m.file)).digest("hex")!==m.sha256)process.exit(1)'
+          gh release create "$RELEASE_TAG" installer/*.exe installer/manifest.json --repo "$GITHUB_REPOSITORY" --verify-tag --title "CopyCopy $RELEASE_TAG" --generate-notes

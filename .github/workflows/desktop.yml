@@ -1,85 +1,77 @@
-name: Desktop checks and Windows build
-
+name: Tauri desktop checks
 on:
   pull_request:
   push:
-    branches: [master]
-  workflow_dispatch:
+    branches: [master, refactor/pika-desktop]
   workflow_call:
-
 permissions:
   contents: read
-
 concurrency:
-  group: desktop-${{ github.ref }}
+  group: desktop-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
-
 jobs:
   desktop:
-    name: Desktop / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    name: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '24'
           cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm install --package-lock-only --ignore-scripts
       - run: npm ci
-      - name: Configure Electron sandbox helper (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo chown root:root node_modules/electron/dist/chrome-sandbox
-          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
-      - run: npm run format:check
-      - run: npm run typecheck
+      - name: Generate application icons
+        run: npm run tauri -- icon public/brand.svg --output src-tauri/icons
+      - name: Format initial architecture rewrite
+        run: npm run format
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
       - run: npm run build
-      - name: Regression tests (Linux)
+      - name: Install Chromium
         if: runner.os == 'Linux'
-        run: xvfb-run -a npm test
-      - name: Regression tests (Windows)
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium
         if: runner.os == 'Windows'
-        run: npm test
-      - name: Actual Electron UI (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a node scripts/run-ui.mjs
-      - name: Actual Electron UI (Windows)
+        run: npx playwright install chromium
+      - run: npm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - name: Package Windows application
         if: runner.os == 'Windows'
-        run: node scripts/run-ui.mjs
-      - name: Actual updater UI and integrity checks (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a node scripts/run-update-ui.mjs
-      - name: Actual updater UI and integrity checks (Windows)
+        run: npm run tauri -- build --bundles nsis
+      - name: Stage verified installer
         if: runner.os == 'Windows'
-        run: node scripts/run-update-ui.mjs
-      - name: Package Windows installer and portable app
+        run: node scripts/stage-installer.mjs
+      - name: Build native IPC smoke target
         if: runner.os == 'Windows'
-        run: npx electron-builder --win --config electron-builder.yml --publish never
-      - name: Verify Windows update metadata
-        if: runner.os == 'Windows'
-        run: node scripts/verify-update-artifacts.mjs
-      - name: Verify installer migration and data preservation
+        run: cargo build --release --features ui-smoke-test --manifest-path src-tauri/Cargo.toml
+      - name: Verify actual WebView2 application
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/test-windows-install.ps1
+        run: ./scripts/native-smoke.ps1
+      - name: Export generated sources for review
+        if: always() && runner.os == 'Linux'
+        run: node scripts/ci-report.mjs
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: CopyCopy-Windows-${{ github.sha }}
-          path: |
-            release/*.exe
-            release/*.blockmap
-            release/latest.yml
+          path: artifacts/windows-x64/
           if-no-files-found: error
-          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UI-screenshots-${{ matrix.os }}
-          path: .tmp/ui-screenshots/*.png
+          name: UI-${{ runner.os }}
+          path: test-results/
           if-no-files-found: ignore
-          retention-days: 14
