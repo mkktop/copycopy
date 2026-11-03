@@ -146,6 +146,7 @@ export async function installDesktop(page: Page) {
         updateAvailable = value
       }
     }
+    w.isTauri = true
     w.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
       convertFileSrc: (file: string, protocol: string) =>

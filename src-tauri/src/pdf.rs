@@ -109,14 +109,19 @@ fn generate(root: &Path, dir: &Path, password: Option<&str>) -> Result<PdfResult
     );
     let catalog = doc.add_object(dictionary! {"Type"=>"Catalog","Pages"=>pages_id});
     doc.trailer.set("Root", catalog);
-    let info=doc.add_object(dictionary!{"Producer"=>Object::string_literal("CopyCopy"),"Title"=>Object::string_literal(dir.file_name().unwrap_or_default().to_string_lossy().as_bytes())});
+    let mut title = vec![0xfe, 0xff];
+    for value in dir.file_name().unwrap_or_default().to_string_lossy().encode_utf16() { title.extend_from_slice(&value.to_be_bytes()); }
+    let info=doc.add_object(dictionary!{"Producer"=>Object::string_literal("CopyCopy"),"Title"=>Object::String(title, lopdf::StringFormat::Hexadecimal)});
     doc.trailer.set("Info", info);
     doc.compress();
     let identifier = uuid::Uuid::new_v4().as_bytes().to_vec();
-    doc.trailer.set("ID", vec![
-        Object::String(identifier.clone(), lopdf::StringFormat::Hexadecimal),
-        Object::String(identifier, lopdf::StringFormat::Hexadecimal),
-    ]);
+    doc.trailer.set(
+        "ID",
+        vec![
+            Object::String(identifier.clone(), lopdf::StringFormat::Hexadecimal),
+            Object::String(identifier, lopdf::StringFormat::Hexadecimal),
+        ],
+    );
     if let Some(password) = password.filter(|p| !p.is_empty() && *p != "None") {
         use lopdf::encryption::crypt_filters::{Aes128CryptFilter, CryptFilter};
         use lopdf::{EncryptionState, EncryptionVersion, Permissions};
@@ -170,10 +175,8 @@ mod tests {
         let path = result.path;
         assert_eq!(Document::load(&path).unwrap().get_pages().len(), 3);
         generate(root, &dir, Some("read-password")).unwrap();
-        let mut doc = Document::load(&path).unwrap();
-        assert!(doc.is_encrypted());
-        assert!(doc.decrypt("wrong-password").is_err());
-        doc.decrypt("read-password").unwrap();
+        assert!(Document::load_with_password(&path, "wrong-password").is_err());
+        let doc = Document::load_with_password(&path, "read-password").unwrap();
         assert_eq!(doc.get_pages().len(), 3);
     }
 }

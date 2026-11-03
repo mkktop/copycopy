@@ -384,23 +384,9 @@ impl DownloadManager {
             }
         }
         self.db.save_chapter(&root.to_string_lossy(), &chapter)?;
-        self.update(&task.id, |t| {
-            t.status = if chapter.complete { "done" } else { "failed" }.into();
-            if !chapter.complete {
-                t.error = Some(format!(
-                    "有 {} 页下载失败，可重试补齐",
-                    t.failed_pages.len()
-                ));
-            }
-            t.finished_at = Some(chrono::Utc::now().timestamp_millis());
-        })?;
         if chapter.complete {
-            let done: BTreeSet<u64> = self
-                .snapshot()
-                .tasks
-                .into_iter()
-                .filter(|t| t.comic.id == task.comic.id && t.status == "done")
-                .map(|t| t.chapter.index)
+            let done: BTreeSet<u64> = self.db.local_chapters(&root.to_string_lossy(), Some(&task.comic.id))?
+                .into_iter().filter(|c| c.complete).map(|c| c.index)
                 .collect();
             if let Some(mut sub) = self
                 .db
@@ -414,6 +400,16 @@ impl DownloadManager {
                 self.db.save_subscription(&sub)?;
             }
         }
+        self.update(&task.id, |t| {
+            t.status = if chapter.complete { "done" } else { "failed" }.into();
+            if !chapter.complete {
+                t.error = Some(format!(
+                    "有 {} 页下载失败，可重试补齐",
+                    t.failed_pages.len()
+                ));
+            }
+            t.finished_at = Some(chrono::Utc::now().timestamp_millis());
+        })?;
         Ok(())
     }
     async fn download_page(
