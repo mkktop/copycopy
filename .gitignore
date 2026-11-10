@@ -1,20 +1,12 @@
 node_modules/
-out/
-release/
 dist/
-
-# 运行时产生的数据
-config/
-logs/
-cache/
-.tmp/
-
-# build/icon.* 需要提交（electron-builder 打包要用），
-# 其余构建产物忽略。图标可用 node scripts/make-icon.mjs 重新生成。
-
+artifacts/
+test-results/
+playwright-report/
+src-tauri/target/
+src-tauri/gen/
 *.log
 .DS_Store
-Thumbs.db
-
-# ZCode 会话状态
-.zcode/
+src-tauri/icons/*
+!src-tauri/icons/icon.png
+!src-tauri/icons/icon.ico
