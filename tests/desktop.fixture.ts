@@ -280,7 +280,7 @@ export async function installDesktop(page: Page) {
         switch (command) {
           case 'app_snapshot':
             return clone({
-              version: '2.0.0',
+              version: '2.1.0',
               settings: state.settings,
               queue: state.queue,
               paths: {
@@ -290,7 +290,7 @@ export async function installDesktop(page: Page) {
               }
             })
           case 'get_app_version':
-            return '2.0.0'
+            return '2.1.0'
           case 'search_comics': {
             const list = args.keyword === '不存在' ? [] : comics
             return clone({
@@ -499,8 +499,8 @@ export async function installDesktop(page: Page) {
           case 'check_for_updates':
             return {
               status: updateAvailable ? 'available' : 'current',
-              current_version: '2.0.0',
-              version: updateAvailable ? '2.1.0' : null,
+              current_version: '2.1.0',
+              version: updateAvailable ? '2.2.0' : null,
               notes: '改进阅读体验\n<img src=x onerror=alert(1)>',
               published_at: '2026-11-03T00:00:00Z',
               can_install: updateAvailable ? canInstall : false,

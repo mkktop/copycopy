@@ -1,7 +1,7 @@
 {
   "name": "copycopy",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "description": "CopyCopy · 原生漫画桌面客户端",
   "scripts": {

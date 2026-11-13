@@ -64,7 +64,7 @@ pub fn run() {
                 const changed=await invoke('update_settings',{patch:{compactCards:true}});
                 const library=await invoke('get_library');
                 const queue=await invoke('get_queue');
-                const ok=!!document.querySelector('[aria-label="主导航"]')&&before.version==='2.0.0'&&changed.compactCards===true&&Array.isArray(library)&&Array.isArray(queue.tasks);
+                const ok=!!document.querySelector('[aria-label="主导航"]')&&before.version==='2.1.0'&&changed.compactCards===true&&Array.isArray(library)&&Array.isArray(queue.tasks);
                 await invoke('smoke_done',{report:{ok,version:before.version,library:library.length,bridge:true}});
             }catch(error){await invoke('smoke_done',{report:{ok:false,error:String(error)}})}
         })()"#);
