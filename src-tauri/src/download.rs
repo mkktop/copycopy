@@ -679,17 +679,14 @@ impl DownloadManager {
         for attempt in 0..3 {
             let result = tokio::select! {_=token.cancelled()=>return Err("已取消".into()),result=self.client.image(url)=>result};
             if let Ok(bytes) = result {
-                let extension = match image::guess_format(&bytes).ok() {
-                    Some(image::ImageFormat::Png) => "png",
-                    Some(image::ImageFormat::WebP) => "webp",
-                    Some(image::ImageFormat::Gif) => "gif",
-                    Some(image::ImageFormat::Bmp) => "bmp",
-                    _ => "jpg",
-                };
-                let path = path.with_extension(extension);
-                tokio::task::spawn_blocking(move || storage::atomic_write(&path, &bytes))
-                    .await
-                    .map_err(|e| e.to_string())??;
+                let target = path.to_path_buf();
+                tokio::task::spawn_blocking(move || {
+                    let (extension, payload) = normalize_image(bytes);
+                    let path = target.with_extension(extension);
+                    storage::atomic_write(&path, &payload)
+                })
+                .await
+                .map_err(|e| e.to_string())??;
                 return Ok(false);
             }
             if attempt < 2 {
@@ -709,6 +706,35 @@ fn page_fingerprint(urls: &[String]) -> String {
         hasher.update([0u8]);
     }
     hex::encode(hasher.finalize())
+}
+
+/// 图片格式归一：库里只保留 JPG/PNG 两种全兼容格式。
+/// - JPG / PNG：原样落盘，零重编码零损失；
+/// - WebP / BMP / GIF：解码后无损转 PNG（兼容性差或几乎不出现的格式）；
+/// - GIF 动图转 PNG 会定格为静帧（漫画场景可忽略）；
+/// - 识别不出格式的按 JPG 存，由后续 valid_image 校验兜底。
+fn normalize_image(bytes: Vec<u8>) -> (&'static str, Vec<u8>) {
+    match image::guess_format(&bytes).ok() {
+        Some(image::ImageFormat::Png) => ("png", bytes),
+        Some(image::ImageFormat::Jpeg) => ("jpg", bytes),
+        format @ (Some(image::ImageFormat::WebP)
+        | Some(image::ImageFormat::Gif)
+        | Some(image::ImageFormat::Bmp)) => {
+            match image::load_from_memory(&bytes).and_then(|image| {
+                let mut png = Vec::new();
+                image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
+                Ok(png)
+            }) {
+                Ok(png) => ("png", png),
+                // 解码失败就原样保存，交给阅读器/PDF 导出侧的格式校验兜底
+                Err(_) => {
+                    log::warn!("非常规图片（{:?}）无法转 PNG，按原始格式保存", format);
+                    ("jpg", bytes)
+                }
+            }
+        }
+        _ => ("jpg", bytes),
+    }
 }
 
 #[cfg(test)]
@@ -890,5 +916,64 @@ mod tests {
         assert_eq!(books[0].chapters.len(), 1);
         assert!(!books[0].chapters[0].complete, "取消的章节不能是完成态");
         assert!(!books[0].chapters[0].failed_pages.is_empty(), "缺页应被记录以便补齐");
+    }
+
+    /// WebP/BMP/GIF 页应无损转成 PNG 落盘（库里只留 JPG/PNG 两种格式）。
+    #[tokio::test]
+    async fn non_jpeg_png_pages_are_normalized_to_png() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/comic/test/chapter2/ch1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":200,"results":{
+                    "chapter":{"contents":[{"url":"/1.webp"}],"words":[0]},
+                    "comic":{"name":"test"}}})),
+            )
+            .mount(&server)
+            .await;
+        let mut webp = Vec::new();
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([9, 8, 7]));
+        image
+            .write_to(&mut std::io::Cursor::new(&mut webp), image::ImageFormat::WebP)
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/1.webp"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(webp))
+            .mount(&server)
+            .await;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("books");
+        std::fs::create_dir(&root).unwrap();
+        let settings = Settings {
+            download_directory: root.to_string_lossy().into_owned(),
+            chapter_delay_min: 0,
+            chapter_delay_max: 0,
+            ..Default::default()
+        };
+        let db = Arc::new(Database::open(&temp.path().join("db.sqlite")).unwrap());
+        let manager = DownloadManager::new(
+            db.clone(),
+            MangaClient::with_base(&server.uri(), Some(String::new())).unwrap(),
+            Arc::new(RwLock::new(settings)),
+            Arc::new(PdfManager::new()),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
+        manager
+            .enqueue(vec![DownloadRequest {
+                comic: Comic { id: "test".into(), title: "test".into(), ..Default::default() },
+                chapter: Chapter { id: "ch1".into(), title: "第1话".into(), index: 1, ..Default::default() },
+            }])
+            .unwrap();
+        wait(&manager).await;
+        let pages = library::files(&db, &root, "test", "ch1").unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].extension().unwrap(), "png", "WebP 页应转成 PNG");
+        assert_eq!(
+            image::image_dimensions(&pages[0]).unwrap(),
+            (8, 8),
+            "转码后尺寸不变"
+        );
     }
 }
