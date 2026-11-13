@@ -230,9 +230,10 @@ impl DownloadManager {
                 .download_directory,
         );
         // 目录创建与 comic 落库放在锁外，且允许失败时提前返回（尚未改动队列）
+        let mut used_dirs = std::collections::HashSet::new();
         let mut prepared: Vec<(DownloadRequest, String)> = Vec::with_capacity(items.len());
         for item in items {
-            let dir = library::chapter_directory(&root, &item.comic, &item.chapter)?;
+            let dir = library::chapter_directory(&root, &item.comic, &item.chapter, &self.db, &mut used_dirs)?;
             self.db.save_comic(&item.comic)?;
             prepared.push((item, dir.to_string_lossy().into_owned()));
         }

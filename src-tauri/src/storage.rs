@@ -52,6 +52,21 @@ pub fn slug(input: &str) -> String {
         value.into()
     }
 }
+/// 纯名字目录用的清洗：在 slug 基础上再挡 Windows 保留设备名
+/// （CON/NUL/COM1...，以前靠哈希后缀天然避开，纯名字后必须显式处理）。
+pub fn safe_name(input: &str) -> String {
+    let mut value = slug(input);
+    let upper = value.to_ascii_uppercase();
+    let stem = upper.split_once('.').map_or(upper.as_str(), |(s, _)| s);
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.contains(&stem) {
+        value.push('_');
+    }
+    value
+}
 pub fn short_id(value: &str) -> String {
     use sha2::{Digest, Sha256};
     hex::encode(Sha256::digest(value.as_bytes()))[..12].into()
