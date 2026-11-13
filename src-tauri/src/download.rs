@@ -233,7 +233,13 @@ impl DownloadManager {
         let mut used_dirs = std::collections::HashSet::new();
         let mut prepared: Vec<(DownloadRequest, String)> = Vec::with_capacity(items.len());
         for item in items {
-            let dir = library::chapter_directory(&root, &item.comic, &item.chapter, &self.db, &mut used_dirs)?;
+            let dir = library::chapter_directory(
+                &root,
+                &item.comic,
+                &item.chapter,
+                &self.db,
+                &mut used_dirs,
+            )?;
             self.db.save_comic(&item.comic)?;
             prepared.push((item, dir.to_string_lossy().into_owned()));
         }
@@ -244,10 +250,7 @@ impl DownloadManager {
         self.start();
         Ok(self.snapshot())
     }
-    fn enqueue_chunk(
-        self: &Arc<Self>,
-        chunk: &[(DownloadRequest, String)],
-    ) -> Result<(), String> {
+    fn enqueue_chunk(self: &Arc<Self>, chunk: &[(DownloadRequest, String)]) -> Result<(), String> {
         let snapshot = {
             let mut queue = self.queue.lock().map_err(|_| "下载队列繁忙")?;
             let active = queue
@@ -579,7 +582,8 @@ impl DownloadManager {
             pdf_path: existing_pdf,
         };
         if !canceled && chapter.complete && settings.export_pdf_after_download {
-            self.update(&task.id, |t| t.error = Some("正在生成 PDF…".into())).await?;
+            self.update(&task.id, |t| t.error = Some("正在生成 PDF…".into()))
+                .await?;
             match self
                 .pdf
                 .export(
@@ -646,7 +650,10 @@ impl DownloadManager {
         let error = if canceled {
             Some("下载已取消，已下载的页可在书库中继续补齐".to_string())
         } else if !chapter.complete {
-            Some(format!("有 {} 页下载失败，可重试补齐", chapter.failed_pages.len()))
+            Some(format!(
+                "有 {} 页下载失败，可重试补齐",
+                chapter.failed_pages.len()
+            ))
         } else {
             None
         };
@@ -856,11 +863,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v3/comic/test/chapter2/ch1"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":200,"results":{
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"code":200,"results":{
                     "chapter":{"contents":[{"url":"/1.jpg"},{"url":"/2.jpg"}],"words":[0,1]},
-                    "comic":{"name":"test"}}})),
-            )
+                    "comic":{"name":"test"}}}),
+            ))
             // 故意慢响应，让取消发生在第一页落盘之后
             .mount(&server)
             .await;
@@ -872,7 +879,11 @@ mod tests {
                 .unwrap();
             Mock::given(method("GET"))
                 .and(path(format!("/{index}.jpg")))
-                .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes).set_delay(Duration::from_millis(300)))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_bytes(bytes)
+                        .set_delay(Duration::from_millis(300)),
+                )
                 .mount(&server)
                 .await;
         }
@@ -897,13 +908,27 @@ mod tests {
         .unwrap();
         manager
             .enqueue(vec![DownloadRequest {
-                comic: Comic { id: "test".into(), title: "test".into(), ..Default::default() },
-                chapter: Chapter { id: "ch1".into(), title: "第1话".into(), index: 1, ..Default::default() },
+                comic: Comic {
+                    id: "test".into(),
+                    title: "test".into(),
+                    ..Default::default()
+                },
+                chapter: Chapter {
+                    id: "ch1".into(),
+                    title: "第1话".into(),
+                    index: 1,
+                    ..Default::default()
+                },
             }])
             .unwrap();
         // 等第一页落盘后取消
         for _ in 0..100 {
-            if manager.snapshot().tasks.iter().any(|t| t.completed + t.skipped > 0) {
+            if manager
+                .snapshot()
+                .tasks
+                .iter()
+                .any(|t| t.completed + t.skipped > 0)
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -915,7 +940,10 @@ mod tests {
         assert_eq!(books.len(), 1, "取消后章节必须出现在书库");
         assert_eq!(books[0].chapters.len(), 1);
         assert!(!books[0].chapters[0].complete, "取消的章节不能是完成态");
-        assert!(!books[0].chapters[0].failed_pages.is_empty(), "缺页应被记录以便补齐");
+        assert!(
+            !books[0].chapters[0].failed_pages.is_empty(),
+            "缺页应被记录以便补齐"
+        );
     }
 
     /// WebP/BMP/GIF 页应无损转成 PNG 落盘（库里只留 JPG/PNG 两种格式）。
@@ -924,17 +952,20 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v3/comic/test/chapter2/ch1"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":200,"results":{
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"code":200,"results":{
                     "chapter":{"contents":[{"url":"/1.webp"}],"words":[0]},
-                    "comic":{"name":"test"}}})),
-            )
+                    "comic":{"name":"test"}}}),
+            ))
             .mount(&server)
             .await;
         let mut webp = Vec::new();
         let image = image::RgbImage::from_pixel(8, 8, image::Rgb([9, 8, 7]));
         image
-            .write_to(&mut std::io::Cursor::new(&mut webp), image::ImageFormat::WebP)
+            .write_to(
+                &mut std::io::Cursor::new(&mut webp),
+                image::ImageFormat::WebP,
+            )
             .unwrap();
         Mock::given(method("GET"))
             .and(path("/1.webp"))
@@ -962,8 +993,17 @@ mod tests {
         .unwrap();
         manager
             .enqueue(vec![DownloadRequest {
-                comic: Comic { id: "test".into(), title: "test".into(), ..Default::default() },
-                chapter: Chapter { id: "ch1".into(), title: "第1话".into(), index: 1, ..Default::default() },
+                comic: Comic {
+                    id: "test".into(),
+                    title: "test".into(),
+                    ..Default::default()
+                },
+                chapter: Chapter {
+                    id: "ch1".into(),
+                    title: "第1话".into(),
+                    index: 1,
+                    ..Default::default()
+                },
             }])
             .unwrap();
         wait(&manager).await;

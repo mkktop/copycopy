@@ -7,7 +7,10 @@ fn rebase(path: &str, old_root: &str, new_root: &str) -> String {
     let old = Path::new(old_root);
     let p = Path::new(path);
     if let Ok(relative) = p.strip_prefix(old) {
-        Path::new(new_root).join(relative).to_string_lossy().into_owned()
+        Path::new(new_root)
+            .join(relative)
+            .to_string_lossy()
+            .into_owned()
     } else {
         path.to_string()
     }

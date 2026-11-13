@@ -1,7 +1,4 @@
-use reqwest::{
-    Client, Url,
-    redirect::Policy,
-};
+use reqwest::{Client, Url, redirect::Policy};
 use serde_json::Value;
 use std::{
     net::{IpAddr, SocketAddr},
@@ -247,9 +244,7 @@ impl MangaClient {
             .ok_or("图片地址缺少域名")?
             .trim_matches(['[', ']'])
             .to_ascii_lowercase();
-        let port = url
-            .port_or_known_default()
-            .ok_or("图片地址协议无效")?;
+        let port = url.port_or_known_default().ok_or("图片地址协议无效")?;
         // Local fixtures share the API origin; preserve the historical
         // pass-through (wiremock binds to loopback) and just return the
         // resolved addresses for pinning.
@@ -316,9 +311,7 @@ impl MangaClient {
                     .ok_or("图片重定向地址无效")?;
                 // Resolve relative Location against the current URL, then run
                 // the full synchronous + async validation on the next hop.
-                let next = current
-                    .join(location)
-                    .map_err(|_| "图片重定向地址无效")?;
+                let next = current.join(location).map_err(|_| "图片重定向地址无效")?;
                 current = validate_image_url_syntax(&self.base, next.as_str())?;
                 continue;
             }
@@ -390,7 +383,10 @@ mod tests {
     fn png_bytes(w: u32, h: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         image::RgbImage::from_pixel(w, h, image::Rgb([1, 2, 3]))
-            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
             .unwrap();
         bytes
     }
@@ -591,9 +587,9 @@ pub fn chapter_page(
     value: Value,
     page: u64,
 ) -> Result<crate::models::Page<crate::models::Chapter>, String> {
-        let offset = value["offset"]
-            .as_u64()
-            .unwrap_or_else(|| (page.saturating_sub(1)).saturating_mul(50));
+    let offset = value["offset"]
+        .as_u64()
+        .unwrap_or_else(|| (page.saturating_sub(1)).saturating_mul(50));
     let items = value["list"]
         .as_array()
         .ok_or("章节列表格式无效")?

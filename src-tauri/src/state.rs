@@ -210,8 +210,8 @@ impl AppState {
                     && !state.downloads.busy()
                 {
                     if let Err(error) = state.check_subscriptions().await {
-                    log::warn!("后台追更检查失败：{error}");
-                }
+                        log::warn!("后台追更检查失败：{error}");
+                    }
                     previous = std::time::Instant::now();
                 }
             }

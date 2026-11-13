@@ -25,9 +25,9 @@ pub fn chapter_directory(
     // 2) 目录已登记在其他章节名下（历史下载）。
     // 命中即加短哈希消歧，避免两章写进同一目录。
     // 本批中其他章节已占用同一目录才算冲突；同章节重入队（重试）不算
-    let taken_by_batch = used
-        .iter()
-        .any(|(p, c, ch)| p.as_path() == resolved.as_path() && (c != &comic.id || ch != &chapter.id));
+    let taken_by_batch = used.iter().any(|(p, c, ch)| {
+        p.as_path() == resolved.as_path() && (c != &comic.id || ch != &chapter.id)
+    });
     let taken_by_db =
         dir_registered_to_other(root, db, &comic.id, Some(&chapter.id), &base).unwrap_or(false);
     if taken_by_batch || taken_by_db {
@@ -84,13 +84,19 @@ fn dir_registered_to_other(
     // 与 DB 中的 canonicalize 路径对齐形式（目录存在时规范化；不存在则按原样比较）
     let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let dir_norm = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+    let dir_norm = dir
+        .to_string_lossy()
+        .trim_end_matches(['/', '\\'])
+        .to_string();
     let dir_prefix = format!("{dir_norm}{}", std::path::MAIN_SEPARATOR);
     #[cfg(test)]
     eprintln!("[dbg] dir_norm={dir_norm} comic={comic_id} chapter={chapter_id:?}");
     for chapter in db.local_chapters(&root.to_string_lossy(), None)? {
         #[cfg(test)]
-        eprintln!("[dbg]   rec comic={} id={} dir={}", chapter.comic_id, chapter.id, chapter.directory);
+        eprintln!(
+            "[dbg]   rec comic={} id={} dir={}",
+            chapter.comic_id, chapter.id, chapter.directory
+        );
         let registered = {
             let d = chapter.directory.trim_end_matches(['/', '\\']);
             d == dir_norm || chapter.directory.starts_with(&dir_prefix)
@@ -114,8 +120,12 @@ fn dir_registered_to_other(
 /// DB 路径是 canonicalize 过的（Windows 带 \\?\ 前缀），与拼接路径形式不同，
 /// 因此按「目录名组件替换」改写，与路径形式无关。
 fn rebind_comic_dir(db: &Database, root: &Path, comic_id: &str, old_dir: &Path, new_dir: &Path) {
-    let Some(old_name) = old_dir.file_name() else { return };
-    let Some(new_name) = new_dir.file_name() else { return };
+    let Some(old_name) = old_dir.file_name() else {
+        return;
+    };
+    let Some(new_name) = new_dir.file_name() else {
+        return;
+    };
     let root_id = root.to_string_lossy().into_owned();
     let Ok(chapters) = db.local_chapters(&root_id, Some(comic_id)) else {
         return;
@@ -238,10 +248,19 @@ mod tests {
     use super::*;
 
     fn comic(id: &str, title: &str) -> Comic {
-        Comic { id: id.into(), title: title.into(), ..Default::default() }
+        Comic {
+            id: id.into(),
+            title: title.into(),
+            ..Default::default()
+        }
     }
     fn chapter(id: &str, title: &str, index: u64) -> Chapter {
-        Chapter { id: id.into(), title: title.into(), index, ..Default::default() }
+        Chapter {
+            id: id.into(),
+            title: title.into(),
+            index,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -251,11 +270,26 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let db = Database::open(&temp.path().join("db.sqlite")).unwrap();
         let mut used = std::collections::HashSet::new();
-        let dir = chapter_directory(&root, &comic("c1", "斗破苍穹"), &chapter("h1", "第12话 陨落的天才", 12), &db, &mut used).unwrap();
-        let expected = std::fs::canonicalize(root.join("斗破苍穹").join("第12话 陨落的天才")).unwrap();
+        let dir = chapter_directory(
+            &root,
+            &comic("c1", "斗破苍穹"),
+            &chapter("h1", "第12话 陨落的天才", 12),
+            &db,
+            &mut used,
+        )
+        .unwrap();
+        let expected =
+            std::fs::canonicalize(root.join("斗破苍穹").join("第12话 陨落的天才")).unwrap();
         assert_eq!(Path::new(&dir), expected.as_path());
         // 同一章节再次入队：目录稳定不漂移
-        let again = chapter_directory(&root, &comic("c1", "斗破苍穹"), &chapter("h1", "第12话 陨落的天才", 12), &db, &mut used).unwrap();
+        let again = chapter_directory(
+            &root,
+            &comic("c1", "斗破苍穹"),
+            &chapter("h1", "第12话 陨落的天才", 12),
+            &db,
+            &mut used,
+        )
+        .unwrap();
         assert_eq!(dir, again);
     }
 
@@ -267,7 +301,14 @@ mod tests {
         let db = Database::open(&temp.path().join("db.sqlite")).unwrap();
         // 两部同名漫画：第一部下载完成后 DB 有记录，第二部落到 名字-短哈希 目录
         let mut used = std::collections::HashSet::new();
-        let first = chapter_directory(&root, &comic("a", "同名漫画"), &chapter("x1", "第1话", 1), &db, &mut used).unwrap();
+        let first = chapter_directory(
+            &root,
+            &comic("a", "同名漫画"),
+            &chapter("x1", "第1话", 1),
+            &db,
+            &mut used,
+        )
+        .unwrap();
         db.save_comic(&comic("a", "同名漫画")).unwrap();
         db.save_chapter(
             &std::fs::canonicalize(&root).unwrap().to_string_lossy(),
@@ -285,16 +326,43 @@ mod tests {
             },
         )
         .unwrap();
-        let second = chapter_directory(&root, &comic("b", "同名漫画"), &chapter("y1", "第1话", 1), &db, &mut used).unwrap();
+        let second = chapter_directory(
+            &root,
+            &comic("b", "同名漫画"),
+            &chapter("y1", "第1话", 1),
+            &db,
+            &mut used,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::canonicalize(first.parent().unwrap()).unwrap(),
             std::fs::canonicalize(root.join("同名漫画")).unwrap()
         );
         assert_ne!(first.parent().unwrap(), second.parent().unwrap());
-        assert!(second.parent().unwrap().to_string_lossy().contains(&storage::short_id("b")));
+        assert!(
+            second
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .contains(&storage::short_id("b"))
+        );
         // 同一漫画内两章同名：后到的加短哈希
-        let c = chapter_directory(&root, &comic("a", "同名漫画"), &chapter("x2", "特别篇", 2), &db, &mut used).unwrap();
-        let d = chapter_directory(&root, &comic("a", "同名漫画"), &chapter("x3", "特别篇", 3), &db, &mut used).unwrap();
+        let c = chapter_directory(
+            &root,
+            &comic("a", "同名漫画"),
+            &chapter("x2", "特别篇", 2),
+            &db,
+            &mut used,
+        )
+        .unwrap();
+        let d = chapter_directory(
+            &root,
+            &comic("a", "同名漫画"),
+            &chapter("x3", "特别篇", 3),
+            &db,
+            &mut used,
+        )
+        .unwrap();
         assert_ne!(c, d);
         assert!(d.to_string_lossy().contains(&storage::short_id("x3")));
     }
@@ -332,18 +400,31 @@ mod tests {
         .unwrap();
         // 再次下载触发迁移
         let mut used = std::collections::HashSet::new();
-        let dir = chapter_directory(&root_canon, &comic, &chapter("h10", "第2话", 2), &db, &mut used).unwrap();
+        let dir = chapter_directory(
+            &root_canon,
+            &comic,
+            &chapter("h10", "第2话", 2),
+            &db,
+            &mut used,
+        )
+        .unwrap();
         let plain = root_canon.join("旧格式漫画");
         assert!(plain.exists(), "旧目录应改名为纯名字");
         assert!(!legacy_canon.exists());
         assert_eq!(
             Path::new(&dir),
-            std::fs::canonicalize(plain.join("第2话")).unwrap().as_path()
+            std::fs::canonicalize(plain.join("第2话"))
+                .unwrap()
+                .as_path()
         );
         // DB 里旧章节的路径同步迁移，书库仍能看到
         let books = list(&db, &root_canon).unwrap();
         assert_eq!(books.len(), 1);
-        assert_eq!(books[0].chapters.len(), 1, "chapter_directory 只建目录；旧章节记录应保留并迁移");
+        assert_eq!(
+            books[0].chapters.len(),
+            1,
+            "chapter_directory 只建目录；旧章节记录应保留并迁移"
+        );
         let migrated = books[0].chapters.iter().find(|c| c.id == "h9").unwrap();
         assert!(Path::new(&migrated.directory).starts_with(&plain));
     }

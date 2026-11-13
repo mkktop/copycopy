@@ -125,14 +125,16 @@ pub async fn export_pdf(
         let db = state.db.clone();
         let rid = root_id.clone();
         let cid = comic_id.clone();
-        let chapter = tauri::async_runtime::spawn_blocking(move || {
-            db.local_chapter(&rid, &cid, &id)
-        })
-        .await
-        .map_err(|e| e.to_string())??
-        .ok_or("章节尚未下载")?;
+        let chapter =
+            tauri::async_runtime::spawn_blocking(move || db.local_chapter(&rid, &cid, &id))
+                .await
+                .map_err(|e| e.to_string())??
+                .ok_or("章节尚未下载")?;
         if !chapter.failed_pages.is_empty() || chapter.page_count < chapter.total as usize {
-            return Err(format!("章节「{}」仍有缺页，请先补齐后再导出", chapter.title));
+            return Err(format!(
+                "章节「{}」仍有缺页，请先补齐后再导出",
+                chapter.title
+            ));
         }
         let result = state
             .pdf
@@ -157,26 +159,27 @@ pub async fn export_pdf(
 pub async fn retry_incomplete(state: App<'_>) -> Result<QueueSnapshot, String> {
     let root = state.root();
     let db = state.db.clone();
-    let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DownloadRequest>, String> {
-        let mut items = Vec::new();
-        for book in library::list(&db, &root)? {
-            for chapter in book.chapters.into_iter().filter(|c| !c.complete) {
-                items.push(DownloadRequest {
-                    comic: book.comic.clone(),
-                    chapter: Chapter {
-                        id: chapter.id,
-                        title: chapter.title,
-                        index: chapter.index,
-                        page_count: chapter.total,
-                        updated_at: String::new(),
-                    },
-                });
+    let items =
+        tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DownloadRequest>, String> {
+            let mut items = Vec::new();
+            for book in library::list(&db, &root)? {
+                for chapter in book.chapters.into_iter().filter(|c| !c.complete) {
+                    items.push(DownloadRequest {
+                        comic: book.comic.clone(),
+                        chapter: Chapter {
+                            id: chapter.id,
+                            title: chapter.title,
+                            index: chapter.index,
+                            page_count: chapter.total,
+                            updated_at: String::new(),
+                        },
+                    });
+                }
             }
-        }
-        Ok(items)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+            Ok(items)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     state.downloads.enqueue(items)
 }
 #[tauri::command]
@@ -321,9 +324,7 @@ fn apply_settings(state: &AppState, patch: serde_json::Value) -> Result<Settings
                 migrate_library_files(&old_root, &next.download_directory)?;
                 log::info!("下载目录已切换，已迁移 {count} 条本地记录及对应文件");
             }
-            state
-                .db
-                .rebind_root(&old_root, &next.download_directory)?;
+            state.db.rebind_root(&old_root, &next.download_directory)?;
             rebound_from = Some(old_root);
         }
     }

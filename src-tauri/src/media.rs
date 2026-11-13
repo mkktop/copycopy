@@ -87,8 +87,7 @@ pub fn handle(
         let state = app.state::<Arc<AppState>>().inner().clone();
         let bytes: Result<Vec<u8>, ()> = if kind == "local" {
             async {
-                let image: LocalImage =
-                    serde_json::from_str(&target).map_err(|_| ())?;
+                let image: LocalImage = serde_json::from_str(&target).map_err(|_| ())?;
                 let paths = crate::library::files(
                     &state.db,
                     &state.root(),
@@ -148,11 +147,7 @@ async fn cached_remote(state: &Arc<AppState>, target: &str) -> Result<Vec<u8>, (
     }
     result
 }
-async fn fetch_and_store(
-    state: &Arc<AppState>,
-    target: &str,
-    cache: &Path,
-) -> Result<Vec<u8>, ()> {
+async fn fetch_and_store(state: &Arc<AppState>, target: &str, cache: &Path) -> Result<Vec<u8>, ()> {
     let _permit = limit().acquire().await.map_err(|_| ())?;
     let bytes = state.client.image(target).await.map_err(|_| ())?;
     if bytes.len() <= 8 * 1024 * 1024 {
