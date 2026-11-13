@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../services/api'
 import type { Comic } from '../types'
@@ -18,9 +18,14 @@ const loading = ref(false)
 const error = ref('')
 let request = 0
 const subtitle = computed(() => active.value + '故事')
+// KeepAlive 首次挂载时 onMounted 与 onActivated 都会触发，用标记跳过首次 activated 避免重复加载。
+let skipFirstActivation = true
 async function load(keyword = active.value) {
   const current = ++request
+  const switched = keyword !== active.value
   active.value = keyword
+  // 切换分类先清空旧卡片，否则骨架屏条件不成立，标题变了内容还是旧分类。
+  if (switched) comics.value = []
   loading.value = true
   error.value = ''
   try {
@@ -33,6 +38,14 @@ async function load(keyword = active.value) {
   }
 }
 onMounted(() => load())
+onActivated(() => {
+  // 切回本页时刷新数据；跳过挂载时的首次 activated（onMounted 已加载）。
+  if (skipFirstActivation) {
+    skipFirstActivation = false
+    return
+  }
+  void load()
+})
 </script>
 <template>
   <div class="page home-view">

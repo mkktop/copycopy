@@ -2,9 +2,25 @@
 import { computed, onMounted } from 'vue'
 import AppIcon from './AppIcon.vue'
 import { useUpdateStore } from '../stores/updates'
+import { useAppStore } from '../stores/app'
+import { useDownloadStore } from '../stores/downloads'
 
 const updates = useUpdateStore()
+const app = useAppStore()
+const downloads = useDownloadStore()
 const macInstaller = computed(() => updates.result?.installer_kind === 'macos')
+// 安装会退出客户端：队列忙时实时禁用，并要求二次确认。
+const installDisabled = computed(() => updates.busy || downloads.busy)
+async function install() {
+  if (installDisabled.value) return
+  const ok = await app.confirm(
+    '退出并安装更新？',
+    '安装程序会关闭当前客户端，请确认漫画下载已全部结束，书库与阅读进度会保留。',
+    '退出并安装',
+    true
+  )
+  if (ok) await updates.install()
+}
 onMounted(() => updates.loadVersion())
 const publishedDate = computed(() => {
   const date = new Date(updates.result?.published_at || '')
@@ -72,8 +88,8 @@ function megabytes(bytes: number) {
         <button
           v-if="['ready', 'installing'].includes(updates.phase)"
           class="btn btn-primary btn-sm"
-          :disabled="updates.busy"
-          @click="updates.install"
+          :disabled="installDisabled"
+          @click="install"
         >
           {{
             updates.phase === 'installing'

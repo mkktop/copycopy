@@ -1,17 +1,24 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Local window controls and notifications; file access stays behind Rust commands.",
+  "description": "仅授予前端实际调用的最小权限；文件与网络访问全部留在 Rust 自定义命令里（Tauri 2 ACL 不约束自定义命令，别误以为能收窄）。",
   "windows": [
     "main"
   ],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "core:window:allow-set-theme",
-    "notification:default"
+    "core:window:allow-is-maximized",
+    "dialog:allow-open",
+    "opener:allow-open-url",
+    "opener:allow-reveal-item-in-dir",
+    "notification:allow-notify",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission"
   ]
 }

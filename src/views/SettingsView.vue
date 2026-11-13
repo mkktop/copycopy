@@ -37,22 +37,33 @@ watch(
     if (!dirty.value) reset()
   }
 )
+// 数字输入被清空时 v-model.number 会给出 ''，这里统一当非法值，给出具体字段提示。
+function intField(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null
+}
+function validate(): string | null {
+  const d = draft.value
+  const parallel = intField(d.parallelImages)
+  if (parallel === null || parallel < 1 || parallel > 16) return '图片并发数应为 1–16 的整数'
+  const delayMin = intField(d.chapterDelayMin)
+  const delayMax = intField(d.chapterDelayMax)
+  if (delayMin === null || delayMax === null || delayMin < 0 || delayMax > 300)
+    return '章节等待时间应为 0–300 秒的整数'
+  if (delayMin > delayMax) return '章节等待时间的最小值不能大于最大值'
+  const interval = intField(d.subscriptionIntervalHours)
+  if (interval === null || interval < 0 || interval > 168)
+    return '订阅检查间隔应为 0–168 小时的整数'
+  const cache = intField(d.imageCacheLimitMb)
+  if (cache === null || cache < 16 || cache > 8192) return '封面缓存容量应为 16–8192 MB 的整数'
+  if (d.proxyMode === 'custom' && !d.proxyUrl.trim()) return '自定义代理模式请填写代理地址'
+  // 空密码后端会归一化成 null，合法；其余字段由后端兜底，前端不误拒合法值。
+  return null
+}
 async function save() {
   if (saving.value) return
-  if (
-    !Number.isInteger(draft.value.parallelImages) ||
-    draft.value.parallelImages < 1 ||
-    draft.value.parallelImages > 16
-  ) {
-    app.notify('图片并发数应为 1–16', true)
-    return
-  }
-  if (
-    draft.value.chapterDelayMin > draft.value.chapterDelayMax ||
-    draft.value.chapterDelayMin < 0 ||
-    draft.value.chapterDelayMax > 300
-  ) {
-    app.notify('请检查章节等待时间', true)
+  const problem = validate()
+  if (problem) {
+    app.notify(problem, true)
     return
   }
   saving.value = true

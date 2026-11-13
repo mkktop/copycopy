@@ -13,6 +13,13 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+// 单张图片解码时允许的最大分配量（防止压缩炸弹）。
+const MAX_IMAGE_ALLOC: u64 = 256 * 1024 * 1024;
+// 单张图片的宽/高上限，避免极端尺寸撑爆内存。
+const MAX_IMAGE_DIMENSION: u32 = 8192;
+// 整章累计未压缩 RGB 字节预算，避免整章图片常驻内存导致 OOM。
+const MAX_CHAPTER_PIXELS: u64 = 512 * 1024 * 1024;
+
 pub struct PdfManager {
     active: Arc<AtomicUsize>,
     gate: Semaphore,
@@ -60,26 +67,55 @@ fn generate(root: &Path, dir: &Path, password: Option<&str>) -> Result<PdfResult
     let mut doc = Document::with_version("1.7");
     let pages_id = doc.new_object_id();
     let mut page_ids = Vec::new();
+    // 累计未压缩 RGB 字节数，超过预算立即中止，防止整章图片常驻内存。
+    let mut chapter_bytes: u64 = 0;
     for file in &files {
+        // 错误信息只回文件名，不泄露本地绝对路径。
+        let name = file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
         if !crate::api::valid_image(&bytes) {
-            return Err(format!("图片无法读取：{}", file.display()));
+            return Err(format!("图片无法读取：{name}"));
         }
-        let image = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        // 用带 Limits 的解码器限制单张图片的分配量与尺寸，抵御解压炸弹。
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()
+            .map_err(|_| format!("图片格式无法识别：{name}"))?;
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(MAX_IMAGE_ALLOC);
+        limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+        limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+        reader.limits(limits);
+        let image = reader
+            .decode()
+            .map_err(|_| format!("图片尺寸过大或无法解码：{name}"))?;
         let (width, height) = (image.width(), image.height());
+        let rgb_bytes = u64::from(width)
+            .saturating_mul(u64::from(height))
+            .saturating_mul(3);
+        if rgb_bytes > MAX_CHAPTER_PIXELS.saturating_sub(chapter_bytes) {
+            return Err(format!("章节图片过多，超过内存预算：{name}"));
+        }
+        chapter_bytes += rgb_bytes;
         let rgba = image.to_rgba8();
-        let mut pixels = Vec::with_capacity(width as usize * height as usize * 3);
+        let mut pixels = Vec::with_capacity(rgb_bytes as usize);
         for pixel in rgba.pixels() {
             let alpha = u16::from(pixel[3]);
             for channel in &pixel.0[..3] {
                 pixels.push(((u16::from(*channel) * alpha + 255 * (255 - alpha)) / 255) as u8);
             }
         }
+        // 立即 compress，避免未压缩 RGB 数据以明文常驻到 save_to。
         let mut stream = Stream::new(
             dictionary! {"Type"=>"XObject","Subtype"=>"Image","Width"=>width as i64,"Height"=>height as i64,"ColorSpace"=>"DeviceRGB","BitsPerComponent"=>8},
             pixels,
         );
-        stream.compress().map_err(|e| e.to_string())?;
+        stream
+            .compress()
+            .map_err(|_| format!("图片压缩失败：{name}"))?;
         let image_id = doc.add_object(stream);
         let w = width as f32 * 0.75;
         let h = height as f32 * 0.75;
@@ -132,10 +168,8 @@ fn generate(root: &Path, dir: &Path, password: Option<&str>) -> Result<PdfResult
     if let Some(password) = password.filter(|p| !p.is_empty()) {
         use lopdf::encryption::crypt_filters::{Aes128CryptFilter, CryptFilter};
         use lopdf::{EncryptionState, EncryptionVersion, Permissions};
-        use sha2::{Digest, Sha256};
-        let owner = hex::encode(Sha256::digest(
-            format!("copycopy-owner:{password}").as_bytes(),
-        ));
+        // owner 密码改为随机值，避免由 user 密码确定性派生而被推算绕过权限位。
+        let owner = uuid::Uuid::new_v4().to_string();
         let filter: Arc<dyn CryptFilter> = Arc::new(Aes128CryptFilter);
         let encryption = EncryptionVersion::V4 {
             document: &doc,

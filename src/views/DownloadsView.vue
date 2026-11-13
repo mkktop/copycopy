@@ -19,7 +19,10 @@ const tabs = computed(() => [
   { value: 'done', label: '已完成', count: store.counts.done },
   { value: 'failed', label: '失败', count: store.counts.failed }
 ])
-const visible = computed(() =>
+// 队列可能很长：只渲染前 PAGE_LIMIT 条，避免全量 v-for 卡顿；容器再用 content-visibility 兜底。
+const PAGE_LIMIT = 100
+const pageLimit = ref(PAGE_LIMIT)
+const filtered = computed(() =>
   store.tasks.filter(
     (t) =>
       filter.value === 'all' ||
@@ -27,6 +30,7 @@ const visible = computed(() =>
       t.status === filter.value
   )
 )
+const visible = computed(() => filtered.value.slice(0, pageLimit.value))
 const progress = (task: DownloadTask) =>
   task.total ? Math.min(100, Math.floor(((task.completed + task.skipped) / task.total) * 100)) : 0
 const labels = {
@@ -45,8 +49,21 @@ async function refresh() {
   }
 }
 async function action(type: Parameters<typeof api.queueAction>[0], id: string | null = null) {
+  // 危险批量操作统一走确认，避免误触清空队列。
+  if (type === 'cancelAll' || type === 'clearFinished') {
+    const title = type === 'cancelAll' ? '取消全部下载任务？' : '清理已结束的记录？'
+    const message =
+      type === 'cancelAll'
+        ? '正在下载和排队中的任务都会被取消，已下载的文件会保留。'
+        : '已完成、失败与已取消的记录会从列表移除，不影响本地文件。'
+    if (!(await app.confirm(title, message, type === 'cancelAll' ? '取消全部' : '清理记录', true)))
+      return
+  }
   const result = await app.run(() => api.queueAction(type, id))
   if (result) store.apply(result)
+}
+function finished(task: DownloadTask) {
+  return task.finishedAt ? new Date(task.finishedAt).toLocaleString('zh-CN') : ''
 }
 function read(task: DownloadTask) {
   void router.push({
@@ -132,7 +149,7 @@ onActivated(refresh)
     </div>
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
     <EmptyState
-      v-if="!visible.length"
+      v-if="!filtered.length"
       :title="store.tasks.length ? '这里暂时没有对应状态的任务' : '让喜欢的故事，慢慢到来'"
       description="从作品详情选择想保存的章节，下载进度会显示在这里。"
       icon="download"
@@ -151,6 +168,7 @@ onActivated(refresh)
           class="task-cover"
           :src="remoteImage(task.comic.cover)"
           :alt="task.comic.title"
+          loading="lazy"
         />
         <span v-else class="task-cover cover-fallback"><AppIcon name="book" /></span>
         <div class="task-body">
@@ -182,6 +200,7 @@ onActivated(refresh)
             <span v-if="task.failedPages.length" class="error-text">
               失败 {{ task.failedPages.length }} 页
             </span>
+            <span v-if="finished(task)">完成于 {{ finished(task) }}</span>
           </div>
           <p
             v-if="task.error"
@@ -219,6 +238,13 @@ onActivated(refresh)
           </button>
         </div>
       </article>
+      <button
+        v-if="filtered.length > visible.length"
+        class="btn btn-secondary btn-sm load-more"
+        @click="pageLimit += PAGE_LIMIT"
+      >
+        加载更多（还有 {{ filtered.length - visible.length }} 条）
+      </button>
     </div>
   </div>
 </template>

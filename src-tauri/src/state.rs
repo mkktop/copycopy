@@ -54,33 +54,36 @@ impl AppState {
         let baseline = Arc::new(Mutex::new(0usize));
         let event_app = app.clone();
         let event_settings = settings.clone();
-        let sink = Arc::new(move |snapshot: QueueSnapshot| {
-            let busy = snapshot
-                .tasks
-                .iter()
-                .any(|t| t.status == "pending" || t.status == "running");
-            let finished = snapshot
-                .tasks
-                .iter()
-                .filter(|t| t.status == "done" || t.status == "failed")
-                .count();
-            let was_busy = previously_busy.swap(busy, Ordering::SeqCst);
-            if busy && !was_busy {
-                *baseline.lock().unwrap_or_else(|e| e.into_inner()) = finished;
+        let sink = Arc::new(move |event: QueueEvent| {
+            // 通知统计需要完整快照（队列转空闲时必发 Full）；增量事件只用于前端刷新
+            if let QueueEvent::Full(snapshot) = &event {
+                let busy = snapshot
+                    .tasks
+                    .iter()
+                    .any(|t| t.status == "pending" || t.status == "running");
+                let finished = snapshot
+                    .tasks
+                    .iter()
+                    .filter(|t| t.status == "done" || t.status == "failed")
+                    .count();
+                let was_busy = previously_busy.swap(busy, Ordering::SeqCst);
+                if busy && !was_busy {
+                    *baseline.lock().unwrap_or_else(|e| e.into_inner()) = finished;
+                }
+                if was_busy
+                    && !busy
+                    && finished > *baseline.lock().unwrap_or_else(|e| e.into_inner())
+                    && event_settings.read().is_ok_and(|s| s.notify_on_done)
+                {
+                    let _ = event_app
+                        .notification()
+                        .builder()
+                        .title("CopyCopy")
+                        .body("下载队列已结束，可前往本地书库查看。")
+                        .show();
+                }
             }
-            if was_busy
-                && !busy
-                && finished > *baseline.lock().unwrap_or_else(|e| e.into_inner())
-                && event_settings.read().is_ok_and(|s| s.notify_on_done)
-            {
-                let _ = event_app
-                    .notification()
-                    .builder()
-                    .title("CopyCopy")
-                    .body("下载队列已结束，可前往本地书库查看。")
-                    .show();
-            }
-            let _ = event_app.emit("queue-update", snapshot);
+            let _ = event_app.emit("queue-update", event);
         });
         let downloads = DownloadManager::new(
             db.clone(),
@@ -170,9 +173,13 @@ impl AppState {
             }
             self.db.save_subscription(&sub)?;
         }
-        let queued = requests.len();
-        if queued > 0 {
-            self.downloads.enqueue(requests)?;
+        // 分批入队：enqueue 内部按 500 自动切批，这里按批独立处理结果，单批失败不影响其余。
+        let mut queued = 0;
+        for chunk in requests.chunks(500) {
+            match self.downloads.enqueue(chunk.to_vec()) {
+                Ok(_) => queued += chunk.len(),
+                Err(error) => errors.push(format!("加入下载队列失败：{error}")),
+            }
         }
         Ok(serde_json::json!({"checked":checked,"queued":queued,"errors":errors}))
     }
@@ -186,7 +193,9 @@ impl AppState {
                 .read()
                 .is_ok_and(|s| s.check_subscriptions_on_launch);
             if startup && !state.downloads.busy() {
-                let _ = state.check_subscriptions().await;
+                if let Err(error) = state.check_subscriptions().await {
+                    log::warn!("后台追更检查失败：{error}");
+                }
             }
             let mut previous = std::time::Instant::now();
             loop {
@@ -200,7 +209,9 @@ impl AppState {
                     && previous.elapsed().as_secs() >= interval * 3600
                     && !state.downloads.busy()
                 {
-                    let _ = state.check_subscriptions().await;
+                    if let Err(error) = state.check_subscriptions().await {
+                    log::warn!("后台追更检查失败：{error}");
+                }
                     previous = std::time::Instant::now();
                 }
             }

@@ -113,15 +113,25 @@ export async function installDesktop(page: Page) {
     const listeners = new Map<number, { event: string; callback: number }>()
     let sequence = 1
     let updateAvailable = false
+    let canInstall = true
     const clone = (value: any) =>
       value === undefined ? undefined : JSON.parse(JSON.stringify(value))
     function flush() {
       localStorage.setItem('copycopy-ui-fixture', JSON.stringify(state))
     }
-    function emit() {
+    function emit(payload?: any) {
       for (const value of listeners.values())
         if (value.event === 'queue-update')
-          callbacks.get(value.callback)?.({ event: 'queue-update', payload: clone(state.queue) })
+          callbacks.get(value.callback)?.({
+            event: 'queue-update',
+            payload: clone(payload ?? state.queue)
+          })
+    }
+    // 发送 Channel 进度事件：onProgress 由前端序列化成 "__CHANNEL__:<id>"，
+    // rawMessage 形如 { message, index } 或 { end: true, index }，交给 transformCallback 的回调。
+    function emitChannelProgress(channelId: string, rawMessage: any) {
+      const id = Number(String(channelId).replace('__CHANNEL__:', ''))
+      callbacks.get(id)?.(rawMessage)
     }
     function updateBooks(task: any) {
       let stored = state.books.find((b: any) => b.comic.id === task.comic.id)
@@ -140,11 +150,93 @@ export async function installDesktop(page: Page) {
       stored.chapters.sort((a: any, b: any) => a.index - b.index)
       stored.totalPages = stored.chapters.reduce((n: number, c: any) => n + c.pageCount, 0)
     }
+
+    // ---- 可注入能力：失败、乱序返回、failed 任务、增量事件、进度事件、can_install:false ----
+    const failures = new Map<string, string>() // command -> 持续失败
+    const onceFailures = new Map<string, string>() // command -> 仅下一次失败
+    const delays = new Map<string, number>() // command -> 额外延迟(ms)
+    const chapterDelays = new Map<string, number>() // "get_chapters:page" -> 延迟(ms)
+    let nextTaskStatus: 'failed' | 'canceled' | null = null
+    let chapterTotal = 52
+    const injected = {
+      unlistenCalls: 0,
+      deltaEmits: 0,
+      progressEmits: 0
+    }
+    // 发送 queue-update 事件并同步 fixture 自身状态，revision 单调递增以通过 store 守卫。
+    function pushQueue(payload: any) {
+      const full = { ...payload, revision: state.queue.revision + 1 }
+      const changed = full.tasks || (full.task ? [full.task] : [])
+      for (const task of changed) {
+        const i = state.queue.tasks.findIndex((t: any) => t.id === task.id)
+        if (i >= 0) state.queue.tasks[i] = { ...state.queue.tasks[i], ...task }
+        else state.queue.tasks.push(task)
+      }
+      state.queue.revision = full.revision
+      flush()
+      emit(full)
+    }
+    function failureFor(command: string): string | undefined {
+      if (onceFailures.has(command)) {
+        const message = onceFailures.get(command)!
+        onceFailures.delete(command)
+        return message
+      }
+      return failures.get(command)
+    }
+    w.__TEST_HOOKS__ = {
+      // 让某命令持续 / 仅下一次抛错
+      fail: (command: string, message = '注入的失败') => failures.set(command, message),
+      failOnce: (command: string, message = '注入的失败') => onceFailures.set(command, message),
+      clearFailures: () => {
+        failures.clear()
+        onceFailures.clear()
+      },
+      // 让某命令变慢；get_chapters 可按页码精确控制乱序
+      delay: (command: string, ms: number) => delays.set(command, ms),
+      delayChapterPage: (page: number, ms: number) => chapterDelays.set(String(page), ms),
+      clearDelays: () => {
+        delays.clear()
+        chapterDelays.clear()
+      },
+      // 让章节列表有多页，供分页竞态用例连点不同页
+      setChapterTotal: (n: number) => {
+        chapterTotal = n
+      },
+      // 下一个入队任务的结局（failed/canceled），用于覆盖错误与重试分支
+      setNextTaskStatus: (status: 'failed' | 'canceled' | null) => {
+        nextTaskStatus = status
+      },
+      // 全量快照：{revision, tasks} —— 走前端 apply 整块替换
+      seedQueue: (tasks: any[]) => pushQueue({ tasks }),
+      // 增量事件：{revision, task} 单对象 —— 走前端 merge 按 id 合并
+      emitTaskDelta: (task: any) => {
+        injected.deltaEmits++
+        pushQueue({ task })
+      },
+      emitSnapshot: () => emit(),
+      // 发送更新下载进度事件（download_update 已自动发送，此钩子可追加自定义进度）
+      emitUpdateProgress: (downloaded: number, total: number, index = 0) => {
+        injected.progressEmits++
+        const onProgress = (window as any).__LAST_ONPROGRESS__
+        if (onProgress) emitChannelProgress(onProgress, { message: { downloaded, total }, index })
+      },
+      setCanInstall: (value: boolean) => {
+        canInstall = value
+      },
+      stats: () => ({ ...injected })
+    }
+    // -----------------------------------------------------------------------------
+
     w.__copycopyTest = {
       state,
       setUpdateAvailable: (value: boolean) => {
         updateAvailable = value
       }
+    }
+    // Tauri 的 listen()/unlisten() 依赖该全局对象，fixture 需补齐以便断言 unlisten 调用。
+    w.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: () => {}
     }
     w.isTauri = true
     w.__TAURI_INTERNALS__ = {
@@ -165,10 +257,26 @@ export async function installDesktop(page: Page) {
         }
         if (command === 'plugin:event|unlisten') {
           listeners.delete(args.eventId)
+          injected.unlistenCalls++
           return
         }
         if (command.startsWith('plugin:window|'))
           return command.endsWith('is_maximized') ? false : null
+
+        // 注入失败（在 switch 之前统一处理，所有命令都可用）
+        const injectedError = failureFor(command)
+        if (injectedError !== undefined) throw injectedError
+
+        // 记录 download_update 的 Channel，供 emitUpdateProgress 使用
+        if (command === 'download_update' && args.onProgress);
+        ;(window as any).__LAST_ONPROGRESS__ = args.onProgress
+
+        const generalDelay = delays.get(command)
+        if (generalDelay) await new Promise((r) => setTimeout(r, generalDelay))
+        if (command === 'get_chapters') {
+          const pageDelay = chapterDelays.get(String(args.page))
+          if (pageDelay) await new Promise((r) => setTimeout(r, pageDelay))
+        }
         switch (command) {
           case 'app_snapshot':
             return clone({
@@ -196,10 +304,11 @@ export async function installDesktop(page: Page) {
             return clone(comics.find((c) => c.id === args.comicId) || comics[0])
           case 'get_chapters':
             return {
-              items: Array.from({ length: Math.min(50, 52 - (args.page - 1) * 50) }, (_, i) =>
-                chapter(args.comicId, (args.page - 1) * 50 + i + 1)
+              items: Array.from(
+                { length: Math.max(0, Math.min(50, chapterTotal - (args.page - 1) * 50)) },
+                (_, i) => chapter(args.comicId, (args.page - 1) * 50 + i + 1)
               ),
-              total: 52,
+              total: chapterTotal,
               page: args.page,
               pageSize: 50
             }
@@ -222,31 +331,38 @@ export async function installDesktop(page: Page) {
                 comic: clone(item.comic),
                 chapter: clone(item.chapter),
                 directory: 'fixture',
-                status: 'running',
+                status: nextTaskStatus ? 'failed' : 'running',
                 completed: 0,
                 total: item.chapter.pageCount,
                 skipped: 0,
-                failedPages: [],
-                error: null,
+                failedPages: nextTaskStatus === 'failed' ? [1] : [],
+                error: nextTaskStatus === 'failed' ? '图片下载失败' : null,
                 startedAt: Date.now(),
-                finishedAt: null
+                finishedAt: nextTaskStatus ? Date.now() : null
               })
+              if (nextTaskStatus === 'canceled') {
+                const t = state.queue.tasks[state.queue.tasks.length - 1]
+                t.status = 'canceled'
+                t.error = null
+              }
+              nextTaskStatus = null
             }
             state.queue.revision++
             flush()
             emit()
-            setTimeout(() => {
-              for (const task of state.queue.tasks)
-                if (task.status === 'running') {
-                  task.status = 'done'
-                  task.completed = task.total
-                  task.finishedAt = Date.now()
-                  updateBooks(task)
-                }
-              state.queue.revision++
-              flush()
-              emit()
-            }, 250)
+            if (state.queue.tasks.some((t: any) => t.status === 'running'))
+              setTimeout(() => {
+                for (const task of state.queue.tasks)
+                  if (task.status === 'running') {
+                    task.status = 'done'
+                    task.completed = task.total
+                    task.finishedAt = Date.now()
+                    updateBooks(task)
+                  }
+                state.queue.revision++
+                flush()
+                emit()
+              }, 250)
             return clone(state.queue)
           }
           case 'queue_action': {
@@ -259,8 +375,30 @@ export async function installDesktop(page: Page) {
                 if (
                   (args.action === 'cancelAll' || t.id === args.id) &&
                   ['pending', 'running'].includes(t.status)
-                )
+                ) {
                   t.status = 'canceled'
+                  t.finishedAt = Date.now()
+                }
+            // retry / retryFailed：把失败或取消的任务重新排队，产生真实状态变更。
+            if (args.action === 'retry' || args.action === 'retryFailed')
+              for (const t of state.queue.tasks)
+                if (
+                  (args.action === 'retryFailed' || t.id === args.id) &&
+                  ['failed', 'canceled'].includes(t.status)
+                ) {
+                  t.status = 'pending'
+                  t.completed = 0
+                  t.error = null
+                  t.finishedAt = null
+                }
+            // moveTop：把指定任务移到队首。
+            if (args.action === 'moveTop' && args.id) {
+              const i = state.queue.tasks.findIndex((t: any) => t.id === args.id)
+              if (i > 0) {
+                const [task] = state.queue.tasks.splice(i, 1)
+                state.queue.tasks.unshift(task)
+              }
+            }
             state.queue.revision++
             flush()
             emit()
@@ -365,12 +503,24 @@ export async function installDesktop(page: Page) {
               version: updateAvailable ? '2.1.0' : null,
               notes: '改进阅读体验\n<img src=x onerror=alert(1)>',
               published_at: '2026-11-03T00:00:00Z',
-              can_install: updateAvailable,
+              can_install: updateAvailable ? canInstall : false,
               download_size: 1024,
               installer_kind: 'windows'
             }
-          case 'download_update':
+          case 'download_update': {
+            // 通过 Channel 发送进度事件，覆盖更新下载进度分支。
+            const onProgress = args.onProgress
+            if (onProgress) {
+              ;[256, 512, 1024].forEach((downloaded, i) =>
+                emitChannelProgress(onProgress, {
+                  message: { downloaded, total: 1024 },
+                  index: i
+                })
+              )
+              emitChannelProgress(onProgress, { end: true, index: 3 })
+            }
             return
+          }
           case 'install_update': {
             if (state.queue.tasks.some((t: any) => ['pending', 'running'].includes(t.status)))
               throw '请等待下载完成'

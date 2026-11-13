@@ -135,6 +135,16 @@ pub struct QueueSnapshot {
     pub revision: u64,
     pub tasks: Vec<DownloadTask>,
 }
+/// 进度事件负载：序列化为两种形态之一，前端按字段判定：
+/// - Full 直接是 {revision, tasks}，前端整块 apply；
+/// - Delta 是 {revision, task}，前端按 id merge。
+/// 用 untagged 保证 wire 格式与前端契约完全一致（不引入额外包装字段）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum QueueEvent {
+    Full(QueueSnapshot),
+    Delta { revision: u64, task: DownloadTask },
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalChapter {
@@ -166,6 +176,30 @@ pub struct ReadingProgress {
     pub page: usize,
     pub updated_at: i64,
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn queue_event_wire_format_matches_frontend_contract() {
+        let task = DownloadTask::default();
+        let full = serde_json::to_value(&QueueEvent::Full(QueueSnapshot {
+            revision: 3,
+            tasks: vec![task.clone()],
+        }))
+        .unwrap();
+        // Full 必须直接是 {revision, tasks}，前端 apply() 才能整块吃下
+        assert_eq!(full["revision"], 3);
+        assert!(full["tasks"].is_array());
+        assert!(full.get("full").is_none());
+        assert!(full.get("task").is_none());
+        let delta = serde_json::to_value(&QueueEvent::Delta { revision: 4, task }).unwrap();
+        // Delta 必须是 {revision, task}，前端 merge() 按 id 合并
+        assert_eq!(delta["revision"], 4);
+        assert!(delta["task"].is_object());
+        assert!(delta.get("tasks").is_none());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Subscription {

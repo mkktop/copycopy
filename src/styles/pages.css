@@ -495,6 +495,17 @@ input[type='checkbox'] {
   flex-direction: column;
   gap: 12px;
 }
+.download-list .load-more {
+  align-self: center;
+  margin-top: 8px;
+}
+/* 大列表首屏外行跳过布局/绘制，减少长队列与书库的渲染开销。 */
+.download-row,
+.local-chapter-row,
+.subscription-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
 .download-row {
   display: flex;
   gap: 19px;
@@ -1273,4 +1284,8 @@ progress::-webkit-progress-value {
 .global-search kbd {
   white-space: nowrap;
   flex-shrink: 0;
+}
+/* 背景内容容器：承接 app-container 的 flex 布局，供对话框打开时整体 inert。 */
+.app-background {
+  display: contents;
 }

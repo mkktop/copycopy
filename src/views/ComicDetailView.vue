@@ -17,11 +17,14 @@ const chapters = ref<Chapter[]>([])
 const selected = ref(new Map<string, Chapter>())
 const total = ref(0)
 const page = ref(1)
+const pageSize = ref(50)
 const loading = ref(false)
 const chapterLoading = ref(false)
 const error = ref('')
 const chapterError = ref('')
 const busy = ref(false)
+const subscribing = ref(false)
+const openingFirst = ref(false)
 const subscribed = ref(false)
 const limit = ref(10)
 const rangeFrom = ref(1)
@@ -31,9 +34,12 @@ const id = computed(() => String(route.params.id))
 const allSelected = computed(
   () => chapters.value.length > 0 && chapters.value.every((c) => selected.value.has(c.id))
 )
+// 章节分页请求号：分页、重试、id 变化都会递增，用于作废旧响应。
 let generation = 0
+// 作品元数据请求号：与章节请求号分开，避免 loadChapters 递增时误伤 loading。
+let metaGeneration = 0
 async function loadChapters(target = 1) {
-  const active = generation
+  const active = ++generation
   chapterLoading.value = true
   chapterError.value = ''
   try {
@@ -41,6 +47,7 @@ async function loadChapters(target = 1) {
     if (active === generation) {
       chapters.value = result.items
       total.value = result.total
+      pageSize.value = result.pageSize || 50
       page.value = target
     }
   } catch (cause) {
@@ -52,7 +59,8 @@ async function loadChapters(target = 1) {
 watch(
   id,
   async () => {
-    const active = ++generation
+    const active = ++metaGeneration
+    generation++ // id 变化：作废上一部作品尚未返回的章节请求
     loading.value = true
     error.value = ''
     comic.value = null
@@ -60,16 +68,16 @@ watch(
     coverFailed.value = false
     try {
       const [result, subs] = await Promise.all([api.comic(id.value), api.subscriptions()])
-      if (active !== generation) return
+      if (active !== metaGeneration) return
       comic.value = result
       const sub = subs.find((s) => s.comic.id === id.value)
       subscribed.value = !!sub
       limit.value = sub?.chapterLimit || 10
       await loadChapters()
     } catch (cause) {
-      if (active === generation) error.value = String(cause)
+      if (active === metaGeneration) error.value = String(cause)
     } finally {
-      if (active === generation) loading.value = false
+      if (active === metaGeneration) loading.value = false
     }
   },
   { immediate: true }
@@ -103,9 +111,10 @@ async function selectRange() {
   busy.value = true
   await app.run(async () => {
     const additions: Chapter[] = []
+    const size = pageSize.value
     for (
-      let p = Math.floor((rangeFrom.value - 1) / 50) + 1;
-      p <= Math.ceil(rangeTo.value / 50);
+      let p = Math.floor((rangeFrom.value - 1) / size) + 1;
+      p <= Math.ceil(rangeTo.value / size);
       p++
     ) {
       const result = p === page.value ? { items: chapters.value } : await api.chapters(id.value, p)
@@ -136,10 +145,12 @@ async function download() {
   busy.value = false
 }
 async function subscription() {
-  if (!comic.value) return
+  if (!comic.value || subscribing.value) return
+  subscribing.value = true
   const book = comic.value
   const result = await app.run(() => api.subscribe(book, limit.value), '追更订阅已保存')
   if (result) subscribed.value = true
+  subscribing.value = false
 }
 function read(chapter: Chapter) {
   void router.push({
@@ -148,8 +159,24 @@ function read(chapter: Chapter) {
     query: { local: '0', index: chapter.index, title: chapter.title }
   })
 }
+// 「开始在线阅读」固定从第一页首章开始，不能用当前页 chapters[0]（翻页后会从第 51 话起）。
+async function readFirst() {
+  if (openingFirst.value) return
+  openingFirst.value = true
+  try {
+    let first: Chapter | undefined = chapters.value[0]
+    if (page.value !== 1 || !first) first = (await api.chapters(id.value, 1)).items[0]
+    if (first) read(first)
+    else app.notify('还没有可阅读的章节', true)
+  } catch (cause) {
+    app.notify(String(cause), true)
+  } finally {
+    openingFirst.value = false
+  }
+}
 onBeforeUnmount(() => {
   generation++
+  metaGeneration++
 })
 </script>
 <template>
@@ -189,13 +216,13 @@ onBeforeUnmount(() => {
           <div class="book-actions">
             <button
               class="btn btn-primary"
-              :disabled="!chapters.length"
-              @click="read(chapters[0]!)"
+              :disabled="!chapters.length || openingFirst"
+              @click="readFirst"
             >
               <AppIcon name="book" :size="16" />
               开始在线阅读
             </button>
-            <button class="btn btn-secondary" @click="subscription">
+            <button class="btn btn-secondary" :disabled="subscribing" @click="subscription">
               <AppIcon name="heart" :size="16" />
               {{ subscribed ? '已订阅追更' : '加入追更' }}
             </button>
@@ -291,7 +318,7 @@ onBeforeUnmount(() => {
       </div>
       <Paginator
         :page="page"
-        :pages="Math.ceil(total / 50)"
+        :pages="Math.ceil(total / pageSize)"
         :loading="chapterLoading"
         @change="loadChapters"
       />

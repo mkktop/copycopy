@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, remoteImage } from '../services/api'
 import type { LibraryBook, LocalChapter } from '../types'
@@ -16,15 +16,25 @@ const error = ref('')
 const managing = ref(false)
 const selected = ref(new Set<string>())
 const query = ref('')
+// 章节过滤输入防抖，避免长列表每次按键都全量重算。
+const debouncedQuery = ref('')
+let queryTimer: ReturnType<typeof setTimeout> | undefined
+watch(query, (value) => {
+  clearTimeout(queryTimer)
+  queryTimer = setTimeout(() => (debouncedQuery.value = value), 200)
+})
+onBeforeUnmount(() => clearTimeout(queryTimer))
 const visible = computed(
   () =>
-    book.value?.chapters.filter((c) => c.title.toLowerCase().includes(query.value.toLowerCase())) ||
-    []
+    book.value?.chapters.filter((c) =>
+      c.title.toLowerCase().includes(debouncedQuery.value.toLowerCase())
+    ) || []
 )
 const allSelected = computed(
   () => visible.value.length > 0 && visible.value.every((c) => selected.value.has(c.id))
 )
 async function load() {
+  if (loading.value) return // 并发保护：刷新/导出/删除后连续调用不重复请求
   loading.value = true
   error.value = ''
   try {
@@ -118,7 +128,12 @@ onMounted(load)
     </EmptyState>
     <template v-else>
       <div class="local-book-header">
-        <img v-if="book.comic.cover" :src="remoteImage(book.comic.cover)" :alt="book.comic.title" />
+        <img
+          v-if="book.comic.cover"
+          :src="remoteImage(book.comic.cover)"
+          :alt="book.comic.title"
+          loading="lazy"
+        />
         <div>
           <div class="eyebrow">SAVED FOR YOUR NEXT CHAPTER</div>
           <h1>{{ book.comic.title }}</h1>

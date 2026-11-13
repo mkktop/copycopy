@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../services/api'
 import type { LibraryBook } from '../types'
@@ -15,6 +15,14 @@ const downloads = useDownloadStore()
 const router = useRouter()
 const books = ref<LibraryBook[]>([])
 const query = ref('')
+// 过滤输入防抖：避免每次按键都全量 filter + localeCompare 排序。
+const debouncedQuery = ref('')
+let queryTimer: ReturnType<typeof setTimeout> | undefined
+watch(query, (value) => {
+  clearTimeout(queryTimer)
+  queryTimer = setTimeout(() => (debouncedQuery.value = value), 200)
+})
+onBeforeUnmount(() => clearTimeout(queryTimer))
 const incomplete = ref(false)
 const order = ref('title')
 const loading = ref(false)
@@ -31,7 +39,7 @@ const visible = computed(() =>
         (!incomplete.value || book.incompleteCount) &&
         (book.comic.title + book.comic.authors.join(' '))
           .toLowerCase()
-          .includes(query.value.toLowerCase())
+          .includes(debouncedQuery.value.toLowerCase())
     )
     .sort((a, b) =>
       order.value === 'pages'
@@ -78,7 +86,9 @@ async function retry() {
   if (result) downloads.apply(result)
 }
 function resetFilters() {
+  clearTimeout(queryTimer)
   query.value = ''
+  debouncedQuery.value = ''
   incomplete.value = false
 }
 onActivated(load)

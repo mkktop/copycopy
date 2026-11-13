@@ -27,7 +27,10 @@ pub fn list(db: &Database, root: &Path) -> Result<Vec<LibraryBook>, String> {
         if storage::inside(root, Path::new(&chapter.directory), false).is_err() {
             continue;
         }
-        chapter.page_count = storage::image_files(root, Path::new(&chapter.directory))?.len();
+        // 单个被删/损坏/无权限的章节目录不应让整个书库列表失败：跳过该章即可
+        chapter.page_count = storage::image_files(root, Path::new(&chapter.directory))
+            .unwrap_or_default()
+            .len();
         chapter.complete =
             chapter.failed_pages.is_empty() && chapter.page_count as u64 >= chapter.total;
         chapter.pdf_path = chapter
@@ -72,18 +75,29 @@ pub fn delete(
     chapters: &[String],
 ) -> Result<usize, String> {
     let mut done = 0;
+    let mut errors = Vec::new();
     for id in chapters {
-        if let Some(chapter) = db.local_chapter(&root.to_string_lossy(), comic_id, id)? {
-            let path = storage::inside(root, Path::new(&chapter.directory), false)?;
-            std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
-            if let Some(pdf) = chapter.pdf_path {
-                if let Ok(pdf) = storage::inside(root, Path::new(&pdf), false) {
-                    std::fs::remove_file(pdf).map_err(|e| e.to_string())?;
+        let Some(chapter) = db.local_chapter(&root.to_string_lossy(), comic_id, id)? else {
+            continue;
+        };
+        // 先删库记录：即便文件删除失败（占用/权限），也不会留下指向已不存在目录的幽灵记录
+        db.remove_chapter(&root.to_string_lossy(), comic_id, id)?;
+        done += 1;
+        if let Ok(path) = storage::inside(root, Path::new(&chapter.directory), false) {
+            if let Err(e) = std::fs::remove_dir_all(path) {
+                errors.push(format!("章节目录：{e}"));
+            }
+        }
+        if let Some(pdf) = chapter.pdf_path {
+            if let Ok(pdf) = storage::inside(root, Path::new(&pdf), false) {
+                if let Err(e) = std::fs::remove_file(pdf) {
+                    errors.push(format!("PDF：{e}"));
                 }
             }
-            db.remove_chapter(&root.to_string_lossy(), comic_id, id)?;
-            done += 1;
         }
+    }
+    if !errors.is_empty() {
+        log::warn!("删除章节时有文件未能清理：{}", errors.join("；"));
     }
     Ok(done)
 }

@@ -18,9 +18,10 @@ const committedKind = ref('')
 const comics = ref<Comic[]>([])
 const total = ref(0)
 const page = ref(1)
+const pageSize = ref(24)
 const loading = ref(false)
 const error = ref('')
-const pages = computed(() => Math.ceil(total.value / 24))
+const pages = computed(() => Math.ceil(total.value / pageSize.value))
 let generation = 0
 async function load(target = 1) {
   if (!committed.value) return
@@ -32,6 +33,7 @@ async function load(target = 1) {
     if (request === generation) {
       comics.value = result.items
       total.value = result.total
+      pageSize.value = result.pageSize || 24
       page.value = target
     }
   } catch (cause) {

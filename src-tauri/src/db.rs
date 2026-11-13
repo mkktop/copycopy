@@ -2,6 +2,17 @@ use crate::models::*;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{path::Path, sync::Mutex};
 
+/// 把绝对路径从旧下载目录前缀换到新目录；不是旧目录内的路径原样返回。
+fn rebase(path: &str, old_root: &str, new_root: &str) -> String {
+    let old = Path::new(old_root);
+    let p = Path::new(path);
+    if let Ok(relative) = p.strip_prefix(old) {
+        Path::new(new_root).join(relative).to_string_lossy().into_owned()
+    } else {
+        path.to_string()
+    }
+}
+
 pub struct Database {
     connection: Mutex<Connection>,
 }
@@ -174,6 +185,68 @@ impl Database {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// 下载目录变更后，把旧 root 下的章节/阅读进度重新挂到新 root。
+    /// chapter.directory / pdf_path 存的是绝对路径，前缀也要一并替换；
+    /// 冲突（新 root 已有同 comic+chapter）保留新记录，删除旧记录。
+    pub fn rebind_root(&self, old_root: &str, new_root: &str) -> Result<(), String> {
+        let mut db = self.connection.lock().map_err(|_| "数据库繁忙")?;
+        let transaction = db.transaction().map_err(|e| e.to_string())?;
+        // 逐条重写 body 里的绝对路径前缀（只替换开头，避免误伤同名子串）
+        let rows: Vec<(String, String, String, String)> = transaction
+            .prepare("SELECT root,comic_id,id,body FROM chapters WHERE root=?1")
+            .and_then(|mut stmt| {
+                stmt.query_map(params![old_root], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| e.to_string())?;
+        for (_, comic_id, id, body) in rows {
+            let mut chapter: LocalChapter =
+                serde_json::from_str(&body).map_err(|e| e.to_string())?;
+            chapter.directory = rebase(&chapter.directory, old_root, new_root);
+            chapter.pdf_path = chapter.pdf_path.map(|p| rebase(&p, old_root, new_root));
+            let new_body = serde_json::to_string(&chapter).map_err(|e| e.to_string())?;
+            // 先删旧主键，再以新 root 插入；冲突时保留新 root 已有的记录
+            transaction
+                .execute(
+                    "DELETE FROM chapters WHERE root=?1 AND comic_id=?2 AND id=?3",
+                    params![old_root, comic_id, id],
+                )
+                .map_err(|e| e.to_string())?;
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO chapters(root,comic_id,id,body) VALUES(?1,?2,?3,?4)",
+                    params![new_root, comic_id, id, new_body],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        transaction
+            .execute("DELETE FROM chapters WHERE root=?1", params![old_root])
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "UPDATE OR IGNORE reading SET root=?1 WHERE root=?2",
+                params![new_root, old_root],
+            )
+            .map_err(|e| e.to_string())?;
+        transaction
+            .execute("DELETE FROM reading WHERE root=?1", params![old_root])
+            .map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())
+    }
+    /// 某 root 下是否有本地数据（切换目录前提示用）
+    pub fn count_local(&self, root: &str) -> Result<usize, String> {
+        let db = self.connection.lock().map_err(|_| "数据库繁忙")?;
+        let n: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM chapters WHERE root=?1",
+                params![root],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(n as usize)
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -209,5 +282,50 @@ mod tests {
         assert_eq!(db.progress("root", "journey").unwrap().unwrap().page, 7);
         assert!(db.progress("other", "journey").unwrap().is_none());
         assert_eq!(db.queue().unwrap()[0].id, "task1");
+    }
+
+    #[test]
+    fn rebind_root_moves_chapters_and_progress_to_new_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("copycopy.sqlite")).unwrap();
+        db.save_chapter(
+            "old",
+            &LocalChapter {
+                id: "ch1".into(),
+                comic_id: "comic".into(),
+                title: "第1话".into(),
+                index: 1,
+                directory: "old/comic/ch1".into(),
+                total: 1,
+                page_count: 1,
+                failed_pages: vec![],
+                complete: true,
+                pdf_path: Some("old/comic/ch1.pdf".into()),
+            },
+        )
+        .unwrap();
+        db.save_progress(
+            "old",
+            &ReadingProgress {
+                comic_id: "comic".into(),
+                chapter_id: "ch1".into(),
+                page: 3,
+                updated_at: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(db.count_local("old").unwrap(), 1);
+        db.rebind_root("old", "new").unwrap();
+        assert_eq!(db.count_local("old").unwrap(), 0);
+        let rebound = db.local_chapter("new", "comic", "ch1").unwrap().unwrap();
+        let expected_dir = Path::new("new").join("comic").join("ch1");
+        let expected_pdf = Path::new("new").join("comic").join("ch1.pdf");
+        assert_eq!(Path::new(&rebound.directory), expected_dir.as_path());
+        assert_eq!(
+            rebound.pdf_path.as_deref().map(Path::new),
+            Some(expected_pdf.as_path())
+        );
+        assert_eq!(db.progress("new", "comic").unwrap().unwrap().page, 3);
+        assert!(db.progress("old", "comic").unwrap().is_none());
     }
 }

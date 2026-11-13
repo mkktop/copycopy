@@ -49,6 +49,8 @@ pub async fn get_chapters(
 }
 #[tauri::command]
 pub fn get_queue(state: App<'_>) -> QueueSnapshot {
+    // 主动读取前把节流的待发进度刷出，避免界面短暂看到旧状态
+    state.downloads.flush();
     state.downloads.snapshot()
 }
 #[tauri::command]
@@ -104,6 +106,12 @@ pub async fn export_pdf(
     comic_id: String,
     chapter_ids: Vec<String>,
 ) -> Result<Vec<PdfResult>, String> {
+    if chapter_ids.is_empty() || chapter_ids.len() > 50 {
+        return Err("请选择 1–50 个章节导出".into());
+    }
+    if state.downloads.busy() || state.pdf.busy() {
+        return Err("请先完成下载任务后再导出 PDF".into());
+    }
     let root = state.root();
     let password = state
         .settings
@@ -112,11 +120,20 @@ pub async fn export_pdf(
         .pdf_password
         .clone();
     let mut results = Vec::new();
+    let root_id = root.to_string_lossy().into_owned();
     for id in chapter_ids {
-        let chapter = state
-            .db
-            .local_chapter(&root.to_string_lossy(), &comic_id, &id)?
-            .ok_or("章节尚未下载")?;
+        let db = state.db.clone();
+        let rid = root_id.clone();
+        let cid = comic_id.clone();
+        let chapter = tauri::async_runtime::spawn_blocking(move || {
+            db.local_chapter(&rid, &cid, &id)
+        })
+        .await
+        .map_err(|e| e.to_string())??
+        .ok_or("章节尚未下载")?;
+        if !chapter.failed_pages.is_empty() || chapter.page_count < chapter.total as usize {
+            return Err(format!("章节「{}」仍有缺页，请先补齐后再导出", chapter.title));
+        }
         let result = state
             .pdf
             .export(
@@ -127,7 +144,11 @@ pub async fn export_pdf(
             .await?;
         let mut chapter = chapter;
         chapter.pdf_path = Some(result.path.clone());
-        state.db.save_chapter(&root.to_string_lossy(), &chapter)?;
+        let db = state.db.clone();
+        let rid = root_id.clone();
+        tauri::async_runtime::spawn_blocking(move || db.save_chapter(&rid, &chapter))
+            .await
+            .map_err(|e| e.to_string())??;
         results.push(result);
     }
     Ok(results)
@@ -135,21 +156,27 @@ pub async fn export_pdf(
 #[tauri::command]
 pub async fn retry_incomplete(state: App<'_>) -> Result<QueueSnapshot, String> {
     let root = state.root();
-    let mut items = Vec::new();
-    for book in library::list(&state.db, &root)? {
-        for chapter in book.chapters.into_iter().filter(|c| !c.complete) {
-            items.push(DownloadRequest {
-                comic: book.comic.clone(),
-                chapter: Chapter {
-                    id: chapter.id,
-                    title: chapter.title,
-                    index: chapter.index,
-                    page_count: chapter.total,
-                    updated_at: String::new(),
-                },
-            });
+    let db = state.db.clone();
+    let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<DownloadRequest>, String> {
+        let mut items = Vec::new();
+        for book in library::list(&db, &root)? {
+            for chapter in book.chapters.into_iter().filter(|c| !c.complete) {
+                items.push(DownloadRequest {
+                    comic: book.comic.clone(),
+                    chapter: Chapter {
+                        id: chapter.id,
+                        title: chapter.title,
+                        index: chapter.index,
+                        page_count: chapter.total,
+                        updated_at: String::new(),
+                    },
+                });
+            }
         }
-    }
+        Ok(items)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     state.downloads.enqueue(items)
 }
 #[tauri::command]
@@ -160,7 +187,13 @@ pub async fn get_reader_pages(
     local: bool,
 ) -> Result<serde_json::Value, String> {
     if local {
-        let files = library::files(&state.db, &state.root(), &comic_id, &chapter_id)?;
+        let db = state.db.clone();
+        let root = state.root();
+        let files = tauri::async_runtime::spawn_blocking(move || {
+            library::files(&db, &root, &comic_id, &chapter_id)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         Ok(serde_json::json!({"count":files.len(),"urls":[]}))
     } else {
         let pages = state.client.pages(&comic_id, &chapter_id).await?;
@@ -260,9 +293,11 @@ fn apply_settings(state: &AppState, patch: serde_json::Value) -> Result<Settings
     }
     let mut next: Settings = serde_json::from_value(value).map_err(|_| "设置格式无效")?;
     next.validate()?;
-    if next.download_directory != guard.download_directory {
-        if state.pdf.busy() {
-            return Err("请先完成 PDF 导出后再切换目录".into());
+    let old_root = guard.download_directory.clone();
+    let mut rebound_from: Option<String> = None;
+    if next.download_directory != old_root {
+        if state.pdf.busy() || state.downloads.busy() {
+            return Err("请先完成下载和 PDF 导出后再切换目录".into());
         }
         let path = PathBuf::from(&next.download_directory);
         if !state
@@ -278,10 +313,32 @@ fn apply_settings(state: &AppState, patch: serde_json::Value) -> Result<Settings
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .into_owned();
+        // 目录切换 = 数据跟着搬：把旧根下的漫画目录逐个移到新根，再重挂 DB 记录与绝对路径。
+        // 同盘 rename 秒级完成，跨盘回退复制+删除；重名跳过并记日志。
+        if !old_root.is_empty() {
+            let count = state.db.count_local(&old_root).unwrap_or(0);
+            if count > 0 {
+                migrate_library_files(&old_root, &next.download_directory)?;
+                log::info!("下载目录已切换，已迁移 {count} 条本地记录及对应文件");
+            }
+            state
+                .db
+                .rebind_root(&old_root, &next.download_directory)?;
+            rebound_from = Some(old_root);
+        }
     }
-    state.client.set_proxy(next.effective_proxy())?;
+    // 只有代理相关字段变化才重建 reqwest Client，避免改个外观就断掉连接池
+    let proxy_changed = next.effective_proxy() != guard.effective_proxy();
+    if proxy_changed {
+        state.client.set_proxy(next.effective_proxy())?;
+    }
     if let Err(error) = state.db.save_settings(&next) {
-        let _ = state.client.set_proxy(guard.effective_proxy());
+        if proxy_changed {
+            let _ = state.client.set_proxy(guard.effective_proxy());
+        }
+        if let Some(old_root) = rebound_from {
+            let _ = state.db.rebind_root(&next.download_directory, &old_root);
+        }
         return Err(error);
     }
     *guard = next.clone();
@@ -364,6 +421,48 @@ pub fn open_chapter(
         .open_path(path.to_string_lossy().into_owned(), None::<&str>)
         .map_err(|e| e.to_string())
 }
+/// 把旧下载根下的漫画目录搬到新根。只搬 DB 里登记的章节所在的顶级漫画目录，
+/// 重名跳过（新目录已有同名内容时以新目录为准，不覆盖）。
+fn migrate_library_files(old_root: &str, new_root: &str) -> Result<(), String> {
+    let old = Path::new(old_root);
+    let new = Path::new(new_root);
+    let entries = std::fs::read_dir(old).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let src = entry.path();
+        let dest = new.join(entry.file_name());
+        if dest.exists() {
+            log::warn!("目标目录已存在，跳过迁移：{}", dest.display());
+            continue;
+        }
+        if let Err(e) = std::fs::rename(&src, &dest) {
+            // EXDEV：跨盘时退回复制+删除
+            if e.raw_os_error() == Some(18) {
+                std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+                copy_dir_all(&src, &dest)?;
+                let _ = std::fs::remove_dir_all(&src);
+            } else {
+                return Err(format!("迁移目录失败：{e}"));
+            }
+        }
+    }
+    Ok(())
+}
+fn copy_dir_all(src: &Path, dest: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+        let target = dest.join(entry.file_name());
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            copy_dir_all(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn clear_image_cache(state: App<'_>) -> Result<(), String> {
     let path = state.cache_root.join("images");

@@ -52,6 +52,7 @@ async function remove(sub: Subscription) {
   if (result) await load()
 }
 async function check() {
+  if (checking.value) return // 同步守卫：双击窄窗口不会重复 invoke
   checking.value = true
   const result = await app.run(() => api.checkSubscriptions())
   if (result) {
@@ -114,7 +115,12 @@ onActivated(load)
           :aria-label="'打开 ' + sub.comic.title"
           @click="router.push('/comic/' + encodeURIComponent(sub.comic.id))"
         >
-          <img v-if="sub.comic.cover" :src="remoteImage(sub.comic.cover)" :alt="sub.comic.title" />
+          <img
+            v-if="sub.comic.cover"
+            :src="remoteImage(sub.comic.cover)"
+            :alt="sub.comic.title"
+            loading="lazy"
+          />
           <AppIcon v-else name="book" :size="30" />
         </button>
         <div class="subscription-info">

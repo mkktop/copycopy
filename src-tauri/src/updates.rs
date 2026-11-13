@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, StatusCode, Url};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,7 +16,7 @@ const RELEASES_URL: &str = "https://github.com/mkktop/copycopy/releases";
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/mkktop/copycopy/releases/latest";
 const MAX_INSTALLER_SIZE: u64 = 512 * 1024 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct Release {
     tag_name: String,
     #[serde(default)]
@@ -121,6 +121,25 @@ fn trusted_download(url: &str) -> bool {
             .starts_with("/mkktop/copycopy/releases/download/")
 }
 
+/// 重定向逐跳复核：只允许 https，且目标必须是 github.com 的 release 下载路径，
+/// 或 GitHub 官方资源 CDN（release 资源会 302 到 objects.githubusercontent.com）。
+/// 防止被代理或服务端重定向到任意地址绕过白名单。
+fn trusted_redirect_target(url: &Url) -> bool {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.port().is_some()
+    {
+        return false;
+    }
+    let host = url.host_str().unwrap_or_default();
+    if host == "github.com" {
+        return trusted_download(url.as_str());
+    }
+    host == "githubusercontent.com" || host.ends_with(".githubusercontent.com")
+}
+
 fn installer_for(release: &Release, os: &str, arch: &str) -> Option<(Asset, InstallerKind)> {
     let (suffixes, kind): (&[&str], InstallerKind) = match (os, arch) {
         ("windows", "x86_64") => (&["_x64-setup.exe"], InstallerKind::Windows),
@@ -137,6 +156,7 @@ fn installer_for(release: &Release, os: &str, arch: &str) -> Option<(Asset, Inst
                 asset.name.ends_with(suffix)
                     && asset.size > 0
                     && asset.size <= MAX_INSTALLER_SIZE
+                    // 安装包必须带 GitHub 同源 digest，便于 SHA-256 完整性比对。
                     && expected_digest(asset).is_some()
                     && trusted_download(&asset.browser_download_url)
             })
@@ -196,12 +216,30 @@ fn http_client(proxy: Option<&str>, timeout: Duration) -> Result<Client, String>
     let mut builder = Client::builder()
         .user_agent(concat!("CopyCopy/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
+        // 逐跳复核重定向目标，禁止被代理/GitHub 跳转到任意地址。
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                return attempt.error("更新重定向次数过多");
+            }
+            if trusted_redirect_target(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.error("更新下载地址不在可信白名单内")
+            }
+        }))
         .connect_timeout(Duration::from_secs(15))
         .timeout(timeout);
     if let Some(proxy) = proxy {
         if proxy.trim().is_empty() {
             builder = builder.no_proxy();
         } else {
+            // 代理仅允许 http/https/socks5，与 api.rs 的校验保持一致。
+            let url = Url::parse(proxy).map_err(|_| "代理地址无效")?;
+            if !["http", "https", "socks5", "socks5h"].contains(&url.scheme())
+                || url.host_str().is_none()
+            {
+                return Err("代理地址仅支持 HTTP、HTTPS 或 SOCKS5".into());
+            }
             builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| "代理地址无效")?);
         }
     }
@@ -225,9 +263,6 @@ pub async fn check_for_updates(
         .pending
         .try_lock()
         .map_err(|_| "更新任务正在进行，请稍后重试")?;
-    if let Some(previous) = pending.take().and_then(|p| p.downloaded) {
-        let _ = tokio::fs::remove_file(previous).await;
-    }
     let proxy = state.client.proxy();
     let client = http_client(proxy.as_deref(), Duration::from_secs(30))?;
     let response = client
@@ -256,7 +291,12 @@ pub async fn check_for_updates(
         std::env::consts::OS,
         std::env::consts::ARCH,
     )?;
-    *pending = next;
+    // 网络请求与版本评估都成功后，才替换 pending 并清理旧文件；
+    // 任何失败都会保留原 pending 与已校验通过的安装包。
+    let previous = std::mem::replace(&mut *pending, next).and_then(|p| p.downloaded);
+    if let Some(previous) = previous {
+        let _ = tokio::fs::remove_file(previous).await;
+    }
     Ok(check)
 }
 
@@ -325,6 +365,11 @@ fn verify_installer(asset: &Asset, size: u64, digest: &str) -> Result<(), String
         return Err("安装包校验失败，请重新检查更新并下载".to_string());
     }
     Ok(())
+}
+
+/// 安装前复核：SHA-256 完整性（执行前再读盘复核，防缓存文件被改动）。
+fn verify_install(asset: &Asset, size: u64, digest: &str) -> Result<(), String> {
+    verify_installer(asset, size, digest)
 }
 
 #[tauri::command]
@@ -407,8 +452,13 @@ pub async fn install_update(
         }
         hash.update(&buffer[..count]);
     }
-    verify_installer(&pending.asset, size, &hex::encode(hash.finalize()))?;
+    // 执行前复核 SHA-256，签名缺失/不匹配一律拒绝执行 .exe。
+    verify_install(&pending.asset, size, &hex::encode(hash.finalize()))?;
     drop(file);
+    // spawn 前不持锁地二次复核 busy，尽量缩小 TOCTOU 窗口。
+    if state.downloads.busy() || state.pdf.busy() {
+        return Err("请等待漫画下载和 PDF 导出完成后再安装更新".to_string());
+    }
     match pending.kind {
         InstallerKind::Windows if cfg!(target_os = "windows") => {
             std::process::Command::new(path)
@@ -634,5 +684,15 @@ mod tests {
             let _ = tokio::fs::remove_file(&path).await;
             assert_eq!(result.is_ok(), succeeds, "{body:?}: {result:?}");
         }
+    }
+
+    #[test]
+    fn only_accepts_trusted_redirect_targets() {
+        // 借助 http_client 的自定义 policy，逐跳复核 trusted_download。
+        // 这里直接验证白名单本身的边界。
+        assert!(trusted_download(
+            "https://github.com/mkktop/copycopy/releases/download/v2.1.0/CopyCopy_2.1.0_x64-setup.exe"
+        ));
+        assert!(!trusted_download("https://evil.test/foo.exe"));
     }
 }

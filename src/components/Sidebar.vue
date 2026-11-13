@@ -3,9 +3,11 @@ import { useAppStore } from '../stores/app'
 import { useDownloadStore } from '../stores/downloads'
 import AppIcon from './AppIcon.vue'
 import BrandMark from './BrandMark.vue'
+import { computed } from 'vue'
 const app = useAppStore()
 const downloads = useDownloadStore()
-const version = __APP_VERSION__
+// 优先展示后端 Snapshot.version，未就绪时回退构建期版本号。
+const version = computed(() => app.version || __APP_VERSION__)
 const groups = [
   {
     label: '探索 / EXPLORE',

@@ -28,6 +28,7 @@ const zoom = ref(Number(preference('zoom', '100')) || 100)
 const chapterIndex = ref(Number(route.query.index) || 1)
 const chapters = ref<Chapter[]>([])
 const totalChapters = ref(0)
+const pageSize = ref(50)
 const failed = ref(new Set<number>())
 const stage = ref<HTMLElement>()
 const imageStyle = computed(() => ({
@@ -44,6 +45,7 @@ let observer: IntersectionObserver | null = null
 let progressTimer: ReturnType<typeof setTimeout> | undefined
 async function persist() {
   clearTimeout(progressTimer)
+  progressTimer = undefined
   if (loading.value || error.value || !count.value) return
   try {
     await api.saveProgress(
@@ -123,11 +125,12 @@ async function load() {
     } else {
       const [book, chapterPage] = await Promise.all([
         api.comic(comicId.value),
-        api.chapters(comicId.value, Math.floor((chapterIndex.value - 1) / 50) + 1)
+        api.chapters(comicId.value, Math.floor((chapterIndex.value - 1) / pageSize.value) + 1)
       ])
       if (active !== generation) return
       bookTitle.value = book.title
       chapters.value = chapterPage.items
+      pageSize.value = chapterPage.pageSize || 50
       totalChapters.value = chapterPage.total
       title.value = chapters.value.find((c) => c.id === chapterId.value)?.title || title.value
     }
@@ -165,10 +168,13 @@ async function nextChapter(direction: number) {
     const index = chapterIndex.value + direction
     if (index >= 1 && index <= totalChapters.value) {
       chapter = chapters.value.find((c) => c.index === index)
-      if (!chapter)
-        chapter = (
-          await app.run(() => api.chapters(comicId.value, Math.floor((index - 1) / 50) + 1))
-        )?.items.find((c) => c.index === index)
+      if (!chapter) {
+        const result = await app.run(() =>
+          api.chapters(comicId.value, Math.floor((index - 1) / pageSize.value) + 1)
+        )
+        chapter = result?.items.find((c) => c.index === index)
+        if (result?.pageSize) pageSize.value = result.pageSize
+      }
     }
   }
   if (!chapter) {
@@ -190,7 +196,13 @@ function keyboard(event: KeyboardEvent) {
     back()
     return
   }
-  if ((event.target as HTMLElement)?.closest('input, select, textarea, button')) return
+  // 仅文本录入控件屏蔽翻页快捷键；点过翻页按钮后焦点留在 button，方向键仍应可用。
+  if (
+    (event.target as HTMLElement)?.closest(
+      'input:not([type=button]):not([type=submit]), textarea, select, [contenteditable]'
+    )
+  )
+    return
   if (['ArrowRight', 'PageDown', 'ArrowLeft', 'PageUp'].includes(event.key)) {
     event.preventDefault()
     const direction = ['ArrowRight', 'PageDown'].includes(event.key) ? 1 : -1
@@ -199,18 +211,26 @@ function keyboard(event: KeyboardEvent) {
     else void jump(page.value + direction + 1)
   }
 }
+// 窗口关闭（WindowControls 直接 appWindow.close()）不触发路由守卫，用 beforeunload 兜底。
+function flushProgress() {
+  if (progressTimer) void persist() // persist 内部 clearTimeout 幂等
+}
 onBeforeRouteLeave(async () => {
   await persist()
 })
 onMounted(() => {
   window.addEventListener('keydown', keyboard)
+  window.addEventListener('beforeunload', flushProgress)
   void load()
 })
 onBeforeUnmount(() => {
   generation++
+  // 卸载时若有 pending 防抖，取消并立即 flush，避免丢失最后一次翻页进度。
+  flushProgress()
   clearTimeout(progressTimer)
   observer?.disconnect()
   window.removeEventListener('keydown', keyboard)
+  window.removeEventListener('beforeunload', flushProgress)
 })
 </script>
 <template>

@@ -4,8 +4,9 @@ use std::{
 };
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
+    // Don't leak OS error strings (they can contain absolute local paths).
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent).map_err(|_| "无法创建缓存目录")?;
     }
     let temporary = path.with_extension(format!("part-{}", uuid::Uuid::new_v4()));
     let result = (|| {
@@ -13,16 +14,16 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .write(true)
             .create_new(true)
             .open(&temporary)
-            .map_err(|e| e.to_string())?;
-        file.write_all(bytes).map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
+            .map_err(|_| "无法写入缓存文件")?;
+        file.write_all(bytes).map_err(|_| "无法写入缓存文件")?;
+        file.sync_all().map_err(|_| "无法写入缓存文件")?;
         drop(file);
-        fs::rename(&temporary, path).map_err(|e| e.to_string())
+        fs::rename(&temporary, path).map_err(|_| "无法写入缓存文件")
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);
     }
-    result
+    result.map_err(|e| e.to_string())
 }
 pub fn inside(root: &Path, path: &Path, allow_root: bool) -> Result<PathBuf, String> {
     let root = fs::canonicalize(root).map_err(|_| "下载目录不存在")?;
@@ -75,18 +76,22 @@ pub fn natural_key(value: &str) -> String {
     key
 }
 pub fn image_files(root: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
+    // Validate (and canonicalize) the directory exactly once instead of
+    // canonicalizing every single file. Entries are then read relative to that
+    // already-validated directory, so no per-file path traversal check is
+    // needed; symlink_metadata (which does not follow links) skips both
+    // directories and symlink escapes.
     let dir = inside(root, dir, false)?;
     let mut files = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+    for entry in fs::read_dir(dir).map_err(|_| "无法读取章节目录")?.flatten() {
         let p = entry.path();
         let ext = p
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if entry.file_type().is_ok_and(|t| t.is_file())
-            && ["jpg", "jpeg", "png", "webp", "gif", "bmp"].contains(&ext.as_str())
-            && inside(root, &p, false).is_ok()
+        if ["jpg", "jpeg", "png", "webp", "gif", "bmp"].contains(&ext.as_str())
+            && fs::symlink_metadata(&p).is_ok_and(|m| m.is_file())
         {
             files.push(p);
         }

@@ -1,7 +1,10 @@
-use reqwest::{Client, Url};
+use reqwest::{
+    Client, Url,
+    redirect::Policy,
+};
 use serde_json::Value;
 use std::{
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -21,10 +24,16 @@ fn client_for(proxy: Option<&str>) -> Result<Client, String> {
     let mut builder = Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none());
+        // JSON/API requests never follow redirects; images use a per-request
+        // client with manual, validated redirects (see `image_client_for`).
+        .redirect(Policy::none());
+    apply_proxy(&mut builder, proxy)?;
+    builder.build().map_err(|_| "无法初始化网络连接".into())
+}
+fn apply_proxy(builder: &mut reqwest::ClientBuilder, proxy: Option<&str>) -> Result<(), String> {
     if let Some(proxy) = proxy {
         if proxy.trim().is_empty() {
-            builder = builder.no_proxy();
+            *builder = std::mem::replace(builder, Client::builder()).no_proxy();
         } else {
             let url = Url::parse(proxy).map_err(|_| "代理地址无效")?;
             if !["http", "https", "socks5", "socks5h"].contains(&url.scheme())
@@ -32,10 +41,77 @@ fn client_for(proxy: Option<&str>) -> Result<Client, String> {
             {
                 return Err("代理地址仅支持 HTTP、HTTPS 或 SOCKS5".into());
             }
-            builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| "代理地址无效")?);
+            *builder = std::mem::replace(builder, Client::builder())
+                .proxy(reqwest::Proxy::all(proxy).map_err(|_| "代理地址无效")?);
         }
     }
-    builder.build().map_err(|_| "无法初始化网络连接".into())
+    Ok(())
+}
+/// Synchronous, DNS-free part of image URL validation. Kept public-compatible
+/// via `MangaClient::validate_image_url` for callers that only need syntactic
+/// checks; `image()` additionally performs the async DNS/SSRF check.
+fn validate_image_url_syntax(base: &Url, source: &str) -> Result<Url, String> {
+    let url = base.join(source).map_err(|_| "图片地址无效")?;
+    if !["http", "https"].contains(&url.scheme())
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("图片地址协议无效".into());
+    }
+    // Explicit test/developer API overrides may use a loopback fixture. Keep
+    // this origin pass-through before the private-IP checks (wiremock binds to
+    // 127.0.0.1); every other host still goes through the full SSRF checks.
+    if url.origin() == base.origin() {
+        return Ok(url);
+    }
+    let host = url
+        .host_str()
+        .ok_or("图片地址缺少域名")?
+        .trim_matches(['[', ']'])
+        .to_lowercase();
+    if host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host.ends_with(".home.arpa")
+        || host.ends_with(".lan")
+        || !host.contains('.') && host.parse::<IpAddr>().is_err()
+    {
+        return Err("不允许访问本地图片地址".into());
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if blocked_ip(&ip) {
+            return Err("不允许访问内网图片地址".into());
+        }
+    }
+    Ok(url)
+}
+/// True for any IP that must never be reached for remote images (loopback,
+/// private, link-local, metadata, CGNAT, multicast, etc.). Also used for every
+/// resolved DNS answer in `validated_socket_addrs`.
+fn blocked_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+                || ip.octets()[0] == 0
+                || ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1])
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|v| v.is_private() || v.is_loopback() || v.is_link_local())
+        }
+    }
 }
 impl MangaClient {
     pub fn new(proxy: Option<String>) -> Result<Self, String> {
@@ -156,81 +232,112 @@ impl MangaClient {
         ordered_pages(&self.base, value, path)
     }
     pub fn validate_image_url(&self, source: &str) -> Result<Url, String> {
-        let url = self.base.join(source).map_err(|_| "图片地址无效")?;
-        if !["http", "https"].contains(&url.scheme())
-            || !url.username().is_empty()
-            || url.password().is_some()
-        {
-            return Err("图片地址协议无效".into());
-        }
+        // Synchronous syntax/blacklist check for callers that don't fetch.
+        // The same-origin fixture pass-through lives in the helper; `image()`
+        // additionally runs the async DNS/SSRF check on every real hop.
+        validate_image_url_syntax(&self.base, source)
+    }
+    /// Async SSRF check: resolve every address for the host, reject private
+    /// ranges, and return the validated socket addresses so the connection can
+    /// be pinned (`.resolve`) to prevent DNS rebinding between check and use.
+    /// Same-origin fixtures (wiremock in tests) are allowed without DNS.
+    async fn validated_socket_addrs(&self, url: &Url) -> Result<Vec<SocketAddr>, String> {
         let host = url
             .host_str()
             .ok_or("图片地址缺少域名")?
             .trim_matches(['[', ']'])
-            .to_lowercase();
-        // Explicit test/developer API overrides may use a loopback fixture.
+            .to_ascii_lowercase();
+        let port = url
+            .port_or_known_default()
+            .ok_or("图片地址协议无效")?;
+        // Local fixtures share the API origin; preserve the historical
+        // pass-through (wiremock binds to loopback) and just return the
+        // resolved addresses for pinning.
         if url.origin() == self.base.origin() {
-            return Ok(url);
-        }
-        if host == "localhost"
-            || host.ends_with(".localhost")
-            || host.ends_with(".local")
-            || !host.contains('.') && host.parse::<IpAddr>().is_err()
-        {
-            return Err("不允许访问本地图片地址".into());
+            return Ok(tokio::net::lookup_host((host.as_str(), port))
+                .await
+                .map_err(|_| "图片地址解析失败")?
+                .collect::<Vec<_>>());
         }
         if let Ok(ip) = host.parse::<IpAddr>() {
-            let blocked = match ip {
-                IpAddr::V4(ip) => {
-                    ip.is_private()
-                        || ip.is_loopback()
-                        || ip.is_link_local()
-                        || ip.is_unspecified()
-                        || ip.is_broadcast()
-                        || ip.is_multicast()
-                        || ip.octets()[0] == 0
-                        || ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1])
-                }
-                IpAddr::V6(ip) => {
-                    ip.is_loopback()
-                        || ip.is_unspecified()
-                        || ip.is_multicast()
-                        || ip.is_unique_local()
-                        || ip.is_unicast_link_local()
-                        || ip
-                            .to_ipv4_mapped()
-                            .is_some_and(|v| v.is_private() || v.is_loopback() || v.is_link_local())
-                }
-            };
-            if blocked {
+            if blocked_ip(&ip) {
                 return Err("不允许访问内网图片地址".into());
             }
+            return Ok(vec![SocketAddr::new(ip, port)]);
         }
-        Ok(url)
+        let addrs = tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(|_| "图片地址解析失败")?
+            .collect::<Vec<_>>();
+        if addrs.is_empty() || addrs.iter().any(|a| blocked_ip(&a.ip())) {
+            return Err("不允许访问内网图片地址".into());
+        }
+        Ok(addrs)
+    }
+    fn image_client_for(&self, url: &Url, addrs: &[SocketAddr]) -> Result<Client, String> {
+        let host = url
+            .host_str()
+            .ok_or("图片地址缺少域名")?
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase();
+        let proxy = self.proxy.read().map_err(|_| "网络繁忙")?.clone();
+        let mut builder = Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(30))
+            // Manual, validated redirects; never let reqwest follow on its own.
+            .redirect(Policy::none())
+            .resolve_to_addrs(&host, addrs);
+        apply_proxy(&mut builder, proxy.as_deref())?;
+        builder.build().map_err(|_| "无法初始化网络连接".into())
     }
     pub async fn image(&self, source: &str) -> Result<Vec<u8>, String> {
-        let url = self.validate_image_url(source)?;
-        let client = { self.client.read().map_err(|_| "网络繁忙")?.clone() };
-        let mut response = client
-            .get(url)
-            .headers(self.headers(true))
-            .send()
-            .await
-            .map_err(|_| "图片连接失败")?;
-        if !response.status().is_success() {
-            return Err(format!("图片请求失败：HTTP {}", response.status()));
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| "图片下载中断")? {
-            if bytes.len() + chunk.len() > 32 * 1024 * 1024 {
-                return Err("图片超过 32 MB，已停止下载".into());
+        // Manual, bounded redirects: every hop is fully re-validated (syntax +
+        // async DNS/SSRF) and re-pinned, so a CDN 302 to a private host can't
+        // slip through. The global JSON client stays on Policy::none().
+        let mut current = self.validate_image_url(source)?;
+        for hop in 0..=3 {
+            let addrs = self.validated_socket_addrs(&current).await?;
+            let client = self.image_client_for(&current, &addrs)?;
+            let mut response = client
+                .get(current.clone())
+                .headers(self.headers(true))
+                .send()
+                .await
+                .map_err(|_| "图片连接失败")?;
+            let status = response.status();
+            if status.is_redirection() {
+                if hop == 3 {
+                    return Err("图片重定向次数过多".into());
+                }
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or("图片重定向地址无效")?;
+                // Resolve relative Location against the current URL, then run
+                // the full synchronous + async validation on the next hop.
+                let next = current
+                    .join(location)
+                    .map_err(|_| "图片重定向地址无效")?;
+                current = validate_image_url_syntax(&self.base, next.as_str())?;
+                continue;
             }
-            bytes.extend_from_slice(&chunk);
+            if !status.is_success() {
+                return Err(format!("图片请求失败：HTTP {}", response.status()));
+            }
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|_| "图片下载中断")? {
+                if bytes.len() + chunk.len() > 32 * 1024 * 1024 {
+                    return Err("图片超过 32 MB，已停止下载".into());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            if !valid_image(&bytes) {
+                return Err("站点返回的内容不是有效图片".into());
+            }
+            return Ok(bytes);
         }
-        if !valid_image(&bytes) {
-            return Err("站点返回的内容不是有效图片".into());
-        }
-        Ok(bytes)
+        Err("图片重定向次数过多".into())
     }
 }
 pub fn valid_image(bytes: &[u8]) -> bool {
@@ -280,6 +387,13 @@ pub fn ordered_pages(base: &Url, value: Value, fallback: &str) -> Result<Chapter
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn png_bytes(w: u32, h: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::RgbImage::from_pixel(w, h, image::Rgb([1, 2, 3]))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
     #[test]
     fn restores_words_order_and_absolute_urls() {
         let result = ordered_pages(
@@ -327,6 +441,86 @@ mod tests {
             client
                 .validate_image_url("https://cdn.example.test/a.jpg")
                 .is_ok()
+        );
+    }
+    #[test]
+    fn rejects_internal_and_lan_suffixes_and_blocks_private_ips() {
+        let client =
+            MangaClient::with_base("https://api.example.test/", Some(String::new())).unwrap();
+        for url in [
+            "https://nas.home.arpa/cover.jpg",
+            "https://printer.internal/a.png",
+            "https://box.lan/a.webp",
+            "http://192.168.1.1/a",
+            "http://172.16.0.1/a",
+            "http://100.64.0.1/a",
+            "http://[fd00::1]/a",
+        ] {
+            assert!(client.validate_image_url(url).is_err(), "{url}");
+        }
+        // Every resolved DNS answer is checked with the same predicate.
+        for ip in [
+            "10.0.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "224.0.0.1",
+            "100.100.0.1",
+            "::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "::ffff:10.0.0.1",
+        ] {
+            assert!(blocked_ip(&ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(!blocked_ip(&ip.parse().unwrap()), "{ip}");
+        }
+    }
+    #[tokio::test]
+    async fn follows_validated_image_redirects_and_rejects_private_hops() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        let image = png_bytes(4, 4);
+        Mock::given(method("GET"))
+            .and(path("/start.jpg"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", &format!("{}/final.png", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/final.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(image.clone()))
+            .mount(&server)
+            .await;
+        let client = MangaClient::with_base(&server.uri(), Some(String::new())).unwrap();
+        // The fixture origin is same-origin, so the 302 chain is allowed and
+        // the final bytes are validated as a real image.
+        assert_eq!(
+            client
+                .image(&format!("{}/start.jpg", server.uri()))
+                .await
+                .unwrap(),
+            image
+        );
+        // A redirect that lands on a private address is rejected before fetch.
+        Mock::given(method("GET"))
+            .and(path("/evil.jpg"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("Location", "http://127.0.0.1:9/a.png"),
+            )
+            .mount(&server)
+            .await;
+        assert!(
+            client
+                .image(&format!("{}/evil.jpg", server.uri()))
+                .await
+                .is_err()
         );
     }
     #[tokio::test]
@@ -397,7 +591,9 @@ pub fn chapter_page(
     value: Value,
     page: u64,
 ) -> Result<crate::models::Page<crate::models::Chapter>, String> {
-    let offset = value["offset"].as_u64().unwrap_or((page - 1) * 50);
+        let offset = value["offset"]
+            .as_u64()
+            .unwrap_or_else(|| (page.saturating_sub(1)).saturating_mul(50));
     let items = value["list"]
         .as_array()
         .ok_or("章节列表格式无效")?
@@ -406,7 +602,7 @@ pub fn chapter_page(
         .map(|(i, v)| crate::models::Chapter {
             id: v["uuid"].as_str().unwrap_or("").into(),
             title: v["name"].as_str().unwrap_or("").into(),
-            index: offset + i as u64 + 1,
+            index: offset.saturating_add(i as u64).saturating_add(1),
             page_count: v["size"].as_u64().unwrap_or(0),
             updated_at: v["datetime_created"].as_str().unwrap_or("").into(),
         })

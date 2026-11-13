@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api } from '../services/api'
 import { defaultSettings } from '../types'
@@ -9,6 +9,8 @@ export const useAppStore = defineStore('app', () => {
   const loading = ref(false)
   const startupError = ref('')
   const paths = ref({ data: '', downloads: '', cache: '' })
+  // 后端 Snapshot.version：保留并在侧栏展示，避免字段存而不用。
+  const version = ref('')
   const notices = ref<Array<{ id: number; text: string; error: boolean }>>([])
   const confirmation = ref<{
     title: string
@@ -43,15 +45,23 @@ export const useAppStore = defineStore('app', () => {
       : settings.value.appearance
   )
   let noticeId = 0
+  // 保存所有定时句柄，store 卸载时统一清理，避免卸载后仍改写响应式状态。
+  const noticeTimers = new Set<ReturnType<typeof setTimeout>>()
+  onScopeDispose(() => {
+    for (const timer of noticeTimers) clearTimeout(timer)
+    noticeTimers.clear()
+  })
   function notify(text: string, error = false) {
     const id = ++noticeId
     notices.value.push({ id, text, error })
-    setTimeout(
+    const timer = setTimeout(
       () => {
         notices.value = notices.value.filter((item) => item.id !== id)
+        noticeTimers.delete(timer)
       },
       error ? 6500 : 3500
     )
+    noticeTimers.add(timer)
   }
   async function run<T>(job: () => Promise<T>, success?: string): Promise<T | undefined> {
     try {
@@ -77,6 +87,7 @@ export const useAppStore = defineStore('app', () => {
     loading,
     startupError,
     paths,
+    version,
     notices,
     systemDark,
     theme,

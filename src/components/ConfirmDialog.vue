@@ -31,16 +31,17 @@ watch(
 onBeforeUnmount(() => document.removeEventListener('keydown', key, true))
 </script>
 <template>
-  <div v-if="app.confirmation" class="dialog-backdrop">
+  <div v-if="app.confirmation" class="dialog-backdrop" @click.self="app.respond(false)">
     <section
       class="confirm-dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-title"
+      aria-describedby="confirm-message"
       data-confirm-dialog
     >
       <h2 id="confirm-title">{{ app.confirmation.title }}</h2>
-      <p>{{ app.confirmation.message }}</p>
+      <p id="confirm-message">{{ app.confirmation.message }}</p>
       <div class="dialog-actions">
         <button class="btn btn-secondary" data-confirm-cancel @click="app.respond(false)">
           取消
