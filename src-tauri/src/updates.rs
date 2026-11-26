@@ -437,7 +437,9 @@ pub async fn install_update(
         .map_err(|_| "安装包已丢失，请重新检查更新并下载")?;
     let mut hash = Sha256::new();
     let mut size = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
+    // 堆上分配：这个 64KB 局部数组会整块进到命令 future 的栈帧里，
+    // 与 Tauri 的分发链叠加后曾把主线程 1MB 栈顶爆（0xC00000FD）。
+    let mut buffer = vec![0u8; 64 * 1024];
     loop {
         let count = file
             .read(&mut buffer)
